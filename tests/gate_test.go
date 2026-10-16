@@ -60,6 +60,28 @@ func TestFirewall_InvisibleUnicodeAndBase64(t *testing.T) {
 	}
 }
 
+func TestFirewall_LoopDetector(t *testing.T) {
+	ld := firewall.NewLoopDetector(5, 3)
+	args := map[string]interface{}{"query": "status check"}
+
+	// 1st, 2nd, 3rd calls: should be allowed
+	for i := 0; i < 3; i++ {
+		loop, _ := ld.RecordAndCheck("get_status", args)
+		if loop {
+			t.Fatalf("call %d prematurely flagged as loop", i+1)
+		}
+	}
+
+	// 4th call with identical args in sliding window: should trigger loop detection
+	loop, reason := ld.RecordAndCheck("get_status", args)
+	if !loop {
+		t.Fatalf("expected 4th identical call to be flagged as infinite loop")
+	}
+	if reason == "" {
+		t.Errorf("expected non-empty loop violation reason")
+	}
+}
+
 func TestRedact_APIKeysAndSecrets(t *testing.T) {
 	rd := redact.NewRedactor("test-seed")
 
