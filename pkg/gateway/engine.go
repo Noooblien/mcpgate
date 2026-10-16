@@ -76,6 +76,12 @@ func (g *MCPGate) GetRBAC() *rbac.RBACManager {
 	return g.rbac
 }
 
+// RedactObject exposes recursive secret redaction for response/stream payload scrubbing.
+func (g *MCPGate) RedactObject(data interface{}) (interface{}, int) {
+	return g.redactor.RedactObject(data)
+}
+
+
 // InterceptToolCall inspects, authorizes, sanitizes, and audits an MCP tool execution.
 func (g *MCPGate) InterceptToolCall(agentID string, role rbac.AgentRole, toolName string, args map[string]interface{}) SecurityVerdict {
 	start := time.Now()

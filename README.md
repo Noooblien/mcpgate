@@ -56,6 +56,16 @@ mcpgate inspect -agent agent_1 -role standard -tool read_file \
   -args '{"token": "sk-12345678901234567890123456789012"}'
 ```
 
+### Start HTTP & Server-Sent Events (SSE) Proxy
+```bash
+# Transparent HTTP/SSE reverse-proxy on port 8089 forwarding to upstream MCP server
+mcpgate serve --port 8089 --upstream http://localhost:8080
+
+# Check real-time security metrics and gateway health
+curl http://localhost:8089/health
+curl http://localhost:8089/metrics
+```
+
 ### Verify Audit Ledger Tamper-Proof Integrity
 ```bash
 mcpgate audit -strict
@@ -68,6 +78,23 @@ mcpgate rules
 
 ---
 
+## Weekend Development Roadmap 🚀
+
+- [x] Zero-Trust Prompt Injection Firewall & Direct Jailbreak Detectors
+- [x] Secret & Sensitive Token Redactor (Luhn Credit Cards, API Keys, Private Keys, HMAC Pseudonymization)
+- [x] Dynamic Role-Based Access Control (RBAC) & Global SSRF/Traverse Guardrails
+- [x] High-Throughput Token Bucket Rate Limiter
+- [x] Cryptographic Hash Chain Audit Ledger
+- [x] Transparent Stdio Reverse-Proxy (`mcpgate proxy`)
+- [x] High-Performance HTTP & Server-Sent Events (SSE) Reverse-Proxy (`mcpgate serve`)
+- [ ] Interactive Real-Time Terminal TUI Dashboard (`mcpgate tui`)
+- [ ] Ephemeral WASM Policy Plugin Sandbox (`mcpgate wasm`)
+- [ ] Autonomous MCP Red-Team Fuzzing & Security Scanner (`mcpgate fuzz`)
+- [ ] Fleet-Wide Distributed Cluster Synchronization & Redis Quorum Adapter (`mcpgate cluster`)
+
+---
+
 ## License
 
 [MIT](LICENSE) © 2026 [Rahul Singh Maraskole](https://github.com/Noooblien)
+

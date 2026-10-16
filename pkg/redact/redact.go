@@ -207,3 +207,36 @@ func validateLuhn(cc string) bool {
 
 	return sum%10 == 0
 }
+
+// RedactObject recursively scrubs all string values in an arbitrary JSON structure.
+func (r *Redactor) RedactObject(data interface{}) (interface{}, int) {
+	if data == nil {
+		return nil, 0
+	}
+
+	count := 0
+	switch val := data.(type) {
+	case string:
+		res := r.Redact(val)
+		return res.SanitizedText, res.TotalRedacted
+	case map[string]interface{}:
+		cleanedMap := make(map[string]interface{}, len(val))
+		for k, v := range val {
+			cleanedVal, c := r.RedactObject(v)
+			cleanedMap[k] = cleanedVal
+			count += c
+		}
+		return cleanedMap, count
+	case []interface{}:
+		cleanedSlice := make([]interface{}, len(val))
+		for i, v := range val {
+			cleanedItem, c := r.RedactObject(v)
+			cleanedSlice[i] = cleanedItem
+			count += c
+		}
+		return cleanedSlice, count
+	default:
+		return data, 0
+	}
+}
+

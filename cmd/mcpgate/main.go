@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"os"
 
 	"github.com/Noooblien/mcpgate/pkg/audit"
 	"github.com/Noooblien/mcpgate/pkg/gateway"
+	"github.com/Noooblien/mcpgate/pkg/httpproxy"
 	"github.com/Noooblien/mcpgate/pkg/proxy"
 	"github.com/Noooblien/mcpgate/pkg/rbac"
 )
@@ -104,6 +106,55 @@ func main() {
 		fmt.Fprintf(os.Stderr, "🛡️  [MCPGate] Stdio Reverse-Proxy active for %s (Role: %s). Streaming JSON-RPC 2.0...\n", *agentID, *roleStr)
 		_ = proxyInst.RunPipes(os.Stdin, os.Stdout, io.Discard, os.Stdin)
 
+	case "serve":
+		serveCmd := flag.NewFlagSet("serve", flag.ExitOnError)
+		port := serveCmd.Int("port", 8089, "HTTP proxy listen port")
+		upstream := serveCmd.String("upstream", "", "Upstream MCP HTTP/SSE server URL (e.g. http://localhost:8080)")
+		defaultAgent := serveCmd.String("agent", "agent-http-client", "Default agent ID when header is omitted")
+		defaultRole := serveCmd.String("role", "standard", "Default agent role: admin, standard, restricted, readonly")
+		maxRPM := serveCmd.Int("rpm", 120, "Rate limit ceiling in requests-per-minute per agent")
+		_ = serveCmd.Parse(os.Args[2:])
+
+		gate, err := gateway.NewMCPGate(gateway.GatewayConfig{
+			HMACSeed:     "mcpgate-http-seed",
+			MaxRPM:       *maxRPM,
+			BurstSize:    25,
+			AuditLogPath: "./.audit/mcpgate_audit.jsonl",
+		})
+		if err != nil {
+			log.Fatalf("Failed to initialize MCPGate: %v", err)
+		}
+
+		proxyServer, err := httpproxy.NewHTTPProxyServer(httpproxy.HTTPProxyConfig{
+			ListenAddr:     fmt.Sprintf(":%d", *port),
+			UpstreamURL:    *upstream,
+			DefaultAgentID: *defaultAgent,
+			DefaultRole:    rbac.AgentRole(*defaultRole),
+			Gateway:        gate,
+		})
+		if err != nil {
+			log.Fatalf("Failed to initialize HTTP/SSE proxy: %v", err)
+		}
+
+		addr := fmt.Sprintf(":%d", *port)
+		fmt.Printf("\n🛡️  [MCPGate] Zero-Trust HTTP/SSE Reverse-Proxy listening on http://0.0.0.0:%d\n", *port)
+		if *upstream != "" {
+			fmt.Printf("   Upstream MCP Server: %s\n", *upstream)
+		} else {
+			fmt.Printf("   Upstream MCP Server: None (Standalone Gateway Mode)\n")
+		}
+		fmt.Printf("   Default Role:        %s (RPM: %d)\n", *defaultRole, *maxRPM)
+		fmt.Printf("   Audit Ledger:        ./.audit/mcpgate_audit.jsonl\n")
+		fmt.Printf("   Health & Metrics:    http://0.0.0.0:%d/health, /metrics\n\n", *port)
+
+		server := &http.Server{
+			Addr:    addr,
+			Handler: proxyServer.Handler(),
+		}
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Server error: %v", err)
+		}
+
 	case "rules":
 		fmt.Println("\n🛡️  [MCPGate] Active Security Rulesets & Defense-in-Depth Policies:")
 		fmt.Println("  1. Prompt Injection Firewall:")
@@ -132,12 +183,14 @@ func printHelp() {
 	fmt.Println("\nCommands:")
 	fmt.Println("  inspect     Intercept and evaluate a tool call through RBAC, firewall, and secret redaction")
 	fmt.Println("  proxy       Run inline stdio reverse-proxy intercepting live JSON-RPC 2.0 tool execution")
+	fmt.Println("  serve       Start high-performance HTTP & SSE reverse-proxy for remote MCP servers")
 	fmt.Println("  audit       Verify cryptographic hash chain integrity of the audit ledger")
 	fmt.Println("  rules       List active security policies, banned patterns, and redaction schemas")
 	fmt.Println("\nExamples:")
 	fmt.Println("  mcpgate inspect -agent agent_1 -role standard -tool read_file -args '{\"path\": \"main.go\"}'")
 	fmt.Println("  mcpgate inspect -agent agent_1 -role readonly -tool write_file -args '{\"path\": \"foo.txt\"}'")
 	fmt.Println("  mcpgate proxy -agent agent_worker -role standard")
+	fmt.Println("  mcpgate serve --port 8089 --upstream http://localhost:8080")
 	fmt.Println("  mcpgate audit -file ./.audit/mcpgate_audit.jsonl -strict")
 	fmt.Println("  mcpgate rules")
 }
