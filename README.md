@@ -104,6 +104,18 @@ mcpgate injectbench --format markdown
 mcpgate injectbench --strict
 ```
 
+### Rate Limiting & Concurrency Governor (`mcpgate ratelimit`)
+```bash
+# Run multi-agent simulation testing nominal throughput, burst containment & rogue loops:
+mcpgate ratelimit --demo
+
+# Export Markdown report:
+mcpgate ratelimit --demo --format markdown
+
+# Evaluate a single rate limit check for an agent and tool:
+mcpgate ratelimit check -agent agent_1 -tool bash_exec -cost 1.0
+```
+
 ### View Active Security Rules
 ```bash
 mcpgate rules
@@ -111,7 +123,21 @@ mcpgate rules
 
 ---
 
-## Empirical Benchmark Metrics (MCP-InjectBench)
+## Empirical Benchmark Metrics
+
+### Rate Limiter & Concurrency Governor Simulation (`mcpgate ratelimit`)
+| Workload Scenario | Agent ID | Dispatched | Allowed | Rate-Limited | Concurrency Gated | Circuit Broken | P99 (µs) |
+|:-------------------|:---------|:-----------|:--------|:-------------|:------------------|:---------------|:---------|
+| Steady State Research Agent | `agent-researcher-01` | 20 | 20 | 0 | 0 | 0 | 11.0 µs |
+| Spiky Batch Extraction Agent | `agent-batch-extractor` | 35 | 20 | 15 | 0 | 0 | 2.0 µs |
+| High-Concurrency Subprocess Worker | `agent-heavy-runner` | 30 | 3 | 25 | 2 | 0 | 2.0 µs |
+| Runaway Recursive Loop Attacker | `agent-rogue-loop` | 40 | 5 | 20 | 15 | 0 | 1.0 µs |
+
+- **Total Requests Evaluated**: `125` across 4 concurrent agent workloads
+- **Burst & Loop Containment**: `61.6%` runaway / burst requests safely mitigated
+- **Governor Latency Overhead (P50)**: `< 4.0 µs` per tool call
+
+### Empirical Security Benchmark (`mcp-injectbench`)
 
 Verified on `2026-10-18 07:59:50 UTC` across **2,000 total tool calls** in **61ms**:
 

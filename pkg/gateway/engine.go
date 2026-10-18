@@ -91,6 +91,11 @@ func (g *MCPGate) GetRBAC() *rbac.RBACManager {
 	return g.rbac
 }
 
+// GetLimiter returns the underlying TokenBucketLimiter / Concurrency Governor.
+func (g *MCPGate) GetLimiter() *ratelimit.TokenBucketLimiter {
+	return g.limiter
+}
+
 // RedactObject exposes recursive secret redaction for response/stream payload scrubbing.
 func (g *MCPGate) RedactObject(data interface{}) (interface{}, int) {
 	return g.redactor.RedactObject(data)
@@ -102,8 +107,8 @@ func (g *MCPGate) InterceptToolCall(agentID string, role rbac.AgentRole, toolNam
 	start := time.Now()
 	eventID := fmt.Sprintf("evt_%d", time.Now().UnixNano())
 
-	// Phase 1: Rate Limiting
-	if allowed, err := g.limiter.Allow(agentID); !allowed {
+	// Phase 1: Rate Limiting & Concurrency Governor
+	if dec, err := g.limiter.AllowTool(agentID, toolName, 1.0); !dec.Allowed {
 		verdict := SecurityVerdict{
 			Allowed:       false,
 			Verdict:       spec.VerdictBlock,
