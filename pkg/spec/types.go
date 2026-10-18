@@ -50,6 +50,7 @@ const (
 	VerdictAllow    GateVerdict = "ALLOW"
 	VerdictBlock    GateVerdict = "BLOCK"
 	VerdictRedacted GateVerdict = "REDACTED"
+	VerdictAudit    GateVerdict = "AUDIT_REQUIRED"
 )
 
 // InterceptEvent details an audited security decision by the gateway.

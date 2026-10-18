@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Declarative Zero-Trust Policy Engine (`pkg/policy`)**: Specification-driven policy evaluation engine with priority resolution, glob tool/agent matching, field-level argument constraints, and temporal execution windows.
+- **Enterprise Policy Actions**: Support for `ALLOW`, `DENY`, `REQUIRE_APPROVAL` (Human-in-the-Loop / 2FA gate), and `FORCE_REDACTION` with dynamic per-rule rate limiting overrides.
+- **Dynamic Hot-Reloading & Manifest Linter**: Thread-safe policy manifest swapping and syntax/logic linter (`mcpgate policy lint`).
+- **CLI Subcommand & Scorecard Visualizations (`mcpgate policy`)**: Rich ANSI policy evaluation scorecards, demo suite (`--demo`), default policy dumping (`dump`), and Mermaid policy hierarchy flowcharts (`--mermaid`).
 - **Adversarial Security Fuzzer & Exploit Neutralization Harness (`pkg/fuzz`)**: Automated attack generator evaluating 8 vulnerability classes (Prompt Injection, Command Injection, SSRF/Cloud Metadata, Path Traversal, Secret Exfiltration, Unicode Evasion, Recursive Loops, Buffer Overflow) and benign control baselines.
 - **Resilience Scorecard & Mermaid Attack Surface Topology (`mcpgate fuzz`)**: Terminal ANSI scorecard formatting (`RenderFuzzScorecard`) and Mermaid pipeline diagrams (`RenderFuzzMermaid`).
 - Sliding-window loop detector preventing infinite recursive tool-calls (OWASP-LLM08).
