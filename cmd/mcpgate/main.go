@@ -14,6 +14,7 @@ import (
 	"github.com/Noooblien/mcpgate/pkg/fuzz"
 	"github.com/Noooblien/mcpgate/pkg/gateway"
 	"github.com/Noooblien/mcpgate/pkg/httpproxy"
+	"github.com/Noooblien/mcpgate/pkg/injectbench"
 	"github.com/Noooblien/mcpgate/pkg/policy"
 	"github.com/Noooblien/mcpgate/pkg/proxy"
 	"github.com/Noooblien/mcpgate/pkg/rbac"
@@ -316,6 +317,39 @@ func main() {
 			os.Exit(1)
 		}
 
+	case "injectbench":
+		benchCmd := flag.NewFlagSet("injectbench", flag.ExitOnError)
+		roleStr := benchCmd.String("role", "standard", "Agent role under test: admin, standard, restricted, readonly")
+		iter := benchCmd.Int("iter", 100, "Number of test iterations")
+		strict := benchCmd.Bool("strict", false, "Exit with code 1 if resilience < 100% or any attack bypasses")
+		format := benchCmd.String("format", "text", "Output format: text | markdown | json")
+		_ = benchCmd.Parse(os.Args[2:])
+
+		cfg := injectbench.DefaultBenchmarkConfig()
+		cfg.Iterations = *iter
+		cfg.TargetRole = *roleStr
+		cfg.StrictMode = *strict
+		cfg.OutputFormat = *format
+
+		summary, err := injectbench.RunBenchmark(nil, cfg)
+		if err != nil {
+			log.Fatalf("InjectBench execution failed: %v", err)
+		}
+
+		switch *format {
+		case "markdown":
+			fmt.Println(injectbench.RenderMarkdownReport(summary))
+		case "json":
+			jsonStr, _ := summary.RenderJSON()
+			fmt.Println(jsonStr)
+		default:
+			fmt.Print(injectbench.RenderTerminalScorecard(summary))
+		}
+
+		if *strict && (!summary.OverallPassed || summary.AttacksBypassed > 0 || summary.FalsePositives > 0) {
+			os.Exit(1)
+		}
+
 	default:
 		printHelp()
 	}
@@ -325,6 +359,7 @@ func printHelp() {
 	fmt.Println("MCPGate — Zero-Trust Model Context Protocol (MCP) Security Gateway & Prompt Injection Firewall")
 	fmt.Println("\nCommands:")
 	fmt.Println("  inspect     Intercept and evaluate a tool call through RBAC, firewall, and secret redaction")
+	fmt.Println("  injectbench Run standardized MCP prompt injection & tool poisoning security benchmarks")
 	fmt.Println("  policy      Evaluate declarative zero-trust policies, lint manifests, or run demo suite")
 	fmt.Println("  fuzz        Run adversarial attack fuzzing suite across 8 vulnerability classes")
 	fmt.Println("  proxy       Run inline stdio reverse-proxy intercepting live JSON-RPC 2.0 tool execution")
@@ -332,6 +367,7 @@ func printHelp() {
 	fmt.Println("  audit       Verify cryptographic hash chain integrity of the audit ledger")
 	fmt.Println("  rules       List active security policies, banned patterns, and redaction schemas")
 	fmt.Println("\nExamples:")
+	fmt.Println("  mcpgate injectbench [--iter 100] [--strict] [--format text|markdown|json]")
 	fmt.Println("  mcpgate inspect -agent agent_1 -role standard -tool read_file -args '{\"path\": \"main.go\"}'")
 	fmt.Println("  mcpgate policy --demo [-strict] [--mermaid]")
 	fmt.Println("  mcpgate policy lint -policy rules.json")
