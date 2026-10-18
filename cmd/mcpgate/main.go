@@ -10,6 +10,7 @@ import (
 	"os"
 
 	"github.com/Noooblien/mcpgate/pkg/audit"
+	"github.com/Noooblien/mcpgate/pkg/fuzz"
 	"github.com/Noooblien/mcpgate/pkg/gateway"
 	"github.com/Noooblien/mcpgate/pkg/httpproxy"
 	"github.com/Noooblien/mcpgate/pkg/proxy"
@@ -173,6 +174,39 @@ func main() {
 		fmt.Println("  5. Cryptographic Audit Ledger:")
 		fmt.Println("     - SHA-256 chained rolling digest ledger stored in ./.audit/mcpgate_audit.jsonl")
 
+	case "fuzz":
+		fuzzCmd := flag.NewFlagSet("fuzz", flag.ExitOnError)
+		roleStr := fuzzCmd.String("role", "standard", "Agent role under test: admin, standard, restricted, readonly")
+		strict := fuzzCmd.Bool("strict", false, "Exit with non-zero code if resilience < 100% or false negatives detected")
+		mermaid := fuzzCmd.Bool("mermaid", false, "Output Mermaid attack surface flowchart diagram")
+		_ = fuzzCmd.Parse(os.Args[2:])
+
+		gate, err := gateway.NewMCPGate(gateway.GatewayConfig{
+			HMACSeed:     "mcpgate-fuzz-cli-seed",
+			MaxRPM:       1000,
+			BurstSize:    500,
+			AuditLogPath: "./.audit/mcpgate_fuzz_audit.jsonl",
+		})
+		if err != nil {
+			log.Fatalf("Failed to initialize gateway for fuzzing: %v", err)
+		}
+
+		fuzzer := fuzz.NewSecurityFuzzer(gate)
+		payloads := fuzz.GenerateDefaultPayloads()
+		report := fuzzer.RunSuite(payloads, rbac.AgentRole(*roleStr))
+
+		if *mermaid {
+			fmt.Println(fuzz.RenderFuzzMermaid(report))
+			return
+		}
+
+		fmt.Print(fuzz.RenderFuzzScorecard(report))
+
+		if *strict && (!report.Passed || report.FalseNegatives > 0) {
+			os.Exit(1)
+		}
+		return
+
 	default:
 		printHelp()
 	}
@@ -182,13 +216,14 @@ func printHelp() {
 	fmt.Println("MCPGate — Zero-Trust Model Context Protocol (MCP) Security Gateway & Prompt Injection Firewall")
 	fmt.Println("\nCommands:")
 	fmt.Println("  inspect     Intercept and evaluate a tool call through RBAC, firewall, and secret redaction")
+	fmt.Println("  fuzz        Run adversarial attack fuzzing suite across 8 vulnerability classes")
 	fmt.Println("  proxy       Run inline stdio reverse-proxy intercepting live JSON-RPC 2.0 tool execution")
 	fmt.Println("  serve       Start high-performance HTTP & SSE reverse-proxy for remote MCP servers")
 	fmt.Println("  audit       Verify cryptographic hash chain integrity of the audit ledger")
 	fmt.Println("  rules       List active security policies, banned patterns, and redaction schemas")
 	fmt.Println("\nExamples:")
 	fmt.Println("  mcpgate inspect -agent agent_1 -role standard -tool read_file -args '{\"path\": \"main.go\"}'")
-	fmt.Println("  mcpgate inspect -agent agent_1 -role readonly -tool write_file -args '{\"path\": \"foo.txt\"}'")
+	fmt.Println("  mcpgate fuzz [-role standard] [-strict] [-mermaid]")
 	fmt.Println("  mcpgate proxy -agent agent_worker -role standard")
 	fmt.Println("  mcpgate serve --port 8089 --upstream http://localhost:8080")
 	fmt.Println("  mcpgate audit -file ./.audit/mcpgate_audit.jsonl -strict")
