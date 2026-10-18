@@ -17,6 +17,7 @@ import (
 	"github.com/Noooblien/mcpgate/pkg/injectbench"
 	"github.com/Noooblien/mcpgate/pkg/policy"
 	"github.com/Noooblien/mcpgate/pkg/proxy"
+	"github.com/Noooblien/mcpgate/pkg/ratelimit"
 	"github.com/Noooblien/mcpgate/pkg/rbac"
 )
 
@@ -350,6 +351,88 @@ func main() {
 			os.Exit(1)
 		}
 
+	case "ratelimit":
+		rlCmd := flag.NewFlagSet("ratelimit", flag.ExitOnError)
+		demo := rlCmd.Bool("demo", false, "Run multi-agent concurrency and burst containment simulation")
+		check := rlCmd.Bool("check", false, "Evaluate a single rate limit check for an agent and tool")
+		agentID := rlCmd.String("agent", "agent-production-01", "Agent identifier")
+		toolName := rlCmd.String("tool", "web_search", "MCP tool name")
+		cost := rlCmd.Float64("cost", 1.0, "Token / weight cost for request")
+		rpm := rlCmd.Int("rpm", 120, "Configured requests per minute")
+		burst := rlCmd.Int("burst", 20, "Burst capacity")
+		maxConc := rlCmd.Int("concurrency", 5, "Max in-flight concurrent operations")
+		format := rlCmd.String("format", "text", "Output format: text | markdown | json")
+		strict := rlCmd.Bool("strict", false, "Exit with code 1 if throttled")
+
+		// Support positional action (e.g. `mcpgate ratelimit demo`)
+		action := ""
+		argsToParse := os.Args[2:]
+		if len(argsToParse) > 0 && !strings.HasPrefix(argsToParse[0], "-") {
+			action = argsToParse[0]
+			argsToParse = argsToParse[1:]
+		}
+		_ = rlCmd.Parse(argsToParse)
+
+		isDemo := *demo || action == "demo" || (!*check && action != "check")
+		isCheck := *check || action == "check"
+
+		governor := ratelimit.NewTokenBucketLimiter(ratelimit.RateLimiterConfig{
+			MaxRPM:             *rpm,
+			Burst:              *burst,
+			MaxConcurrency:     *maxConc,
+			MaxToolConcurrency: map[string]int{"bash_exec": 3},
+			ToolLimits: map[string]ratelimit.ToolLimit{
+				"bash_exec": {MaxRPM: 60, Burst: 5},
+			},
+		})
+
+		if isCheck && !*demo && action != "demo" {
+			dec, err := governor.AllowTool(*agentID, *toolName, *cost)
+			if *format == "json" {
+				bytes, _ := json.MarshalIndent(dec, "", "  ")
+				fmt.Println(string(bytes))
+			} else {
+				fmt.Printf("\n🛡️  [MCPGate] Rate Limit & Concurrency Check for Agent '%s'\n", *agentID)
+				fmt.Printf("   Tool:             %s (Cost: %.1f)\n", *toolName, *cost)
+				if dec.Allowed {
+					fmt.Printf("   Status:           \033[1;32m[ALLOWED]\033[0m\n")
+					fmt.Printf("   Remaining Tokens: %.1f / %.1f\n", dec.TokensRemaining, dec.Capacity)
+					fmt.Printf("   Refill Rate:      %.2f tokens/sec\n\n", dec.RefillRatePerSec)
+				} else {
+					fmt.Printf("   Status:           \033[1;31m[THROTTLED: %s]\033[0m\n", dec.Status)
+					fmt.Printf("   Reason:           %s\n", err)
+					fmt.Printf("   Retry-After:      %v\n\n", dec.RetryAfter)
+					if *strict {
+						os.Exit(1)
+					}
+				}
+			}
+			return
+		}
+
+		if isDemo {
+			scenarios := ratelimit.DefaultSimulationScenarios()
+			summary, err := ratelimit.RunSimulation(governor, scenarios)
+			if err != nil {
+				log.Fatalf("Rate limiter simulation failed: %v", err)
+			}
+
+			switch *format {
+			case "markdown":
+				fmt.Println(ratelimit.RenderMarkdownReport(summary))
+			case "json":
+				jsonStr, _ := summary.RenderJSON()
+				fmt.Println(jsonStr)
+			default:
+				fmt.Print(ratelimit.RenderTerminalScorecard(summary))
+			}
+
+			if *strict && summary.BurstContainmentPct < 20.0 {
+				os.Exit(1)
+			}
+			return
+		}
+
 	default:
 		printHelp()
 	}
@@ -361,12 +444,15 @@ func printHelp() {
 	fmt.Println("  inspect     Intercept and evaluate a tool call through RBAC, firewall, and secret redaction")
 	fmt.Println("  injectbench Run standardized MCP prompt injection & tool poisoning security benchmarks")
 	fmt.Println("  policy      Evaluate declarative zero-trust policies, lint manifests, or run demo suite")
+	fmt.Println("  ratelimit   Run dynamic token bucket rate limiter, concurrency governor & burst containment engine")
 	fmt.Println("  fuzz        Run adversarial attack fuzzing suite across 8 vulnerability classes")
 	fmt.Println("  proxy       Run inline stdio reverse-proxy intercepting live JSON-RPC 2.0 tool execution")
 	fmt.Println("  serve       Start high-performance HTTP & SSE reverse-proxy for remote MCP servers")
 	fmt.Println("  audit       Verify cryptographic hash chain integrity of the audit ledger")
 	fmt.Println("  rules       List active security policies, banned patterns, and redaction schemas")
 	fmt.Println("\nExamples:")
+	fmt.Println("  mcpgate ratelimit [--demo] [--format text|markdown|json]")
+	fmt.Println("  mcpgate ratelimit check -agent agent_1 -tool bash_exec -cost 1.0")
 	fmt.Println("  mcpgate injectbench [--iter 100] [--strict] [--format text|markdown|json]")
 	fmt.Println("  mcpgate inspect -agent agent_1 -role standard -tool read_file -args '{\"path\": \"main.go\"}'")
 	fmt.Println("  mcpgate policy --demo [-strict] [--mermaid]")
