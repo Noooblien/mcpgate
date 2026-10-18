@@ -71,6 +71,15 @@ curl http://localhost:8089/metrics
 mcpgate audit -strict
 ```
 
+### Run Adversarial Security Fuzzer
+```bash
+# Execute 8-vector attack suite and generate ANSI scorecard
+mcpgate fuzz -role standard
+
+# Output Mermaid attack surface topology diagram
+mcpgate fuzz -mermaid
+```
+
 ### View Active Security Rules
 ```bash
 mcpgate rules
@@ -87,9 +96,9 @@ mcpgate rules
 - [x] Cryptographic Hash Chain Audit Ledger
 - [x] Transparent Stdio Reverse-Proxy (`mcpgate proxy`)
 - [x] High-Performance HTTP & Server-Sent Events (SSE) Reverse-Proxy (`mcpgate serve`)
+- [x] Autonomous MCP Red-Team Fuzzing & Security Scanner (`mcpgate fuzz`)
 - [ ] Interactive Real-Time Terminal TUI Dashboard (`mcpgate tui`)
 - [ ] Ephemeral WASM Policy Plugin Sandbox (`mcpgate wasm`)
-- [ ] Autonomous MCP Red-Team Fuzzing & Security Scanner (`mcpgate fuzz`)
 - [ ] Fleet-Wide Distributed Cluster Synchronization & Redis Quorum Adapter (`mcpgate cluster`)
 
 ---
