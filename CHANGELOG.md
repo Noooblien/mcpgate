@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Cryptographic Tool Provenance, Mutual Request Signing & Non-Repudiation Engine (`pkg/provenance`)**: End-to-end zero-trust request signing with Ed25519 digital signatures, canonical JSON argument hashing, and tamper-proof verification (`mcpgate provenance`).
+- **Gateway Execution Attestation Receipts**: Mints cryptographically signed, verifiable Execution Attestation Receipts linking request signatures, arguments digests, response hashes, and verdicts for non-repudiation audit trails.
+- **Replay Attack & Clock Skew Guardrails**: Sliding-window cryptographic nonce verification with automatic TTL eviction and strict clock skew tolerance ($\pm 30\text{s}$).
+- **Upstream Tool Manifest Verification**: Verifies upstream MCP server schema manifests and descriptions to prevent tool poisoning and man-in-the-middle schema alterations.
+- **CLI Subcommand & Scorecard Visualizations**: Terminal ANSI provenance scorecards (`RenderProvenanceScorecard`), Mermaid sequence flowcharts (`--mermaid`), JSON audit proofs, and Markdown compliance reporting (`--demo`, `--format`, `-verify`).
 - **Ephemeral Secret Vault & Bi-Directional DLP Engine (`pkg/redact`)**: In-memory thread-safe vault with agent tenant isolation, configurable lease TTLs, deterministic surrogate token generation (`[[VAULT:<CAT>:<HEX>]]`), and zero-leak detokenization.
 - **Shannon Entropy Scanner (`entropy.go`)**: Information-theoretic entropy detector ($H(X) \ge 4.3$) identifying unstructured high-entropy credentials, private keys, and connection strings while excluding structured tokens.
 - **Role-Based Data Loss Prevention Policies**: Enforces `VAULT`, `MASK`, `BLOCK`, and `ALLOW` modes with privilege escalation prevention for restricted agent roles.

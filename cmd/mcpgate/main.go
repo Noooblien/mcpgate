@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/Noooblien/mcpgate/pkg/audit"
 	"github.com/Noooblien/mcpgate/pkg/fuzz"
@@ -16,6 +17,7 @@ import (
 	"github.com/Noooblien/mcpgate/pkg/httpproxy"
 	"github.com/Noooblien/mcpgate/pkg/injectbench"
 	"github.com/Noooblien/mcpgate/pkg/policy"
+	"github.com/Noooblien/mcpgate/pkg/provenance"
 	"github.com/Noooblien/mcpgate/pkg/proxy"
 	"github.com/Noooblien/mcpgate/pkg/ratelimit"
 	"github.com/Noooblien/mcpgate/pkg/rbac"
@@ -517,6 +519,101 @@ func main() {
 
 		fmt.Println("Usage: mcpgate redact [--demo] [-text <string>] [-detokenize <token>] [--mode vault|mask|block] [--mermaid]")
 
+	case "provenance", "attest":
+		provCmd := flag.NewFlagSet("provenance", flag.ExitOnError)
+		demo := provCmd.Bool("demo", false, "Run cryptographic provenance and non-repudiation audit demonstration")
+		mermaid := provCmd.Bool("mermaid", false, "Output Mermaid sequence diagram markup of the verified signing lifecycle")
+		format := provCmd.String("format", "text", "Output format: text | markdown | json")
+		strict := provCmd.Bool("strict", false, "Exit with code 1 if any legitimate scenario fails verification")
+		verifyFile := provCmd.String("verify", "", "Path to a JSON AttestationReceipt file to verify")
+		_ = provCmd.Parse(os.Args[2:])
+
+		pe, agentPrivs, err := provenance.SetupDemoEnvironment()
+		if err != nil {
+			log.Fatalf("Failed to initialize provenance engine: %v", err)
+		}
+
+		if *verifyFile != "" {
+			data, err := os.ReadFile(*verifyFile)
+			if err != nil {
+				log.Fatalf("Failed to read receipt file: %v", err)
+			}
+			receipt, err := provenance.ParseReceiptFromJSON(data)
+			if err != nil {
+				log.Fatalf("Invalid receipt JSON: %v", err)
+			}
+			valid, err := pe.VerifyReceipt(receipt)
+			if valid && err == nil {
+				fmt.Printf("\n\033[1;32m[VERIFIED]\033[0m Attestation Receipt '%s' is authentic and tamper-evident.\n", receipt.ReceiptID)
+				fmt.Printf("   Agent:      %s\n", receipt.AgentID)
+				fmt.Printf("   Tool:       %s\n", receipt.ToolName)
+				fmt.Printf("   Verdict:    %s\n", receipt.Verdict)
+				fmt.Printf("   Timestamp:  %s\n\n", receipt.Timestamp.Format(time.RFC3339))
+			} else {
+				fmt.Printf("\n\033[1;31m[TAMPERED]\033[0m Attestation Receipt verification failed: %v\n\n", err)
+				os.Exit(1)
+			}
+			return
+		}
+
+		scenarios := provenance.GetDemoScenarios()
+		if *demo || len(os.Args) == 2 {
+			var allProofs []*provenance.AuditProof
+			for _, sc := range scenarios {
+				priv := agentPrivs[sc.AgentID]
+				req, err := pe.SignRequest(sc.AgentID, priv, sc.ToolName, sc.ArgumentsJSON)
+				if err != nil {
+					log.Fatalf("Request signing failed: %v", err)
+				}
+
+				if sc.TamperPayload {
+					req.ArgumentsJSON = `{"cluster": "attacker-controlled-node", "image": "malicious/trojan:latest"}`
+				}
+
+				if sc.ReplayNonce {
+					_ = pe.VerifyRequest(req)
+				}
+
+				verRes := pe.VerifyRequest(req)
+
+				var receipt *provenance.AttestationReceipt
+				if verRes.Valid {
+					receipt, _ = pe.IssueReceipt(req, sc.ResponseJSON, sc.Verdict, sc.Duration)
+				}
+
+				proof := &provenance.AuditProof{
+					Receipt:      receipt,
+					Request:      req,
+					Verification: verRes,
+				}
+				allProofs = append(allProofs, proof)
+
+				if *format == "text" {
+					fmt.Print(provenance.RenderProvenanceScorecard(verRes, receipt))
+					if *mermaid && receipt != nil {
+						fmt.Println(provenance.RenderProvenanceMermaid(receipt))
+					}
+				}
+			}
+
+			switch *format {
+			case "markdown":
+				fmt.Println(provenance.RenderMarkdownReport(allProofs))
+			case "json":
+				bytes, _ := json.MarshalIndent(allProofs, "", "  ")
+				fmt.Println(string(bytes))
+			}
+
+			if *strict {
+				for _, p := range allProofs {
+					if !p.Verification.Valid && p.Request.AgentID == "agent-analyst-alpha" && !strings.Contains(p.Verification.Detail, "nonce") {
+						os.Exit(1)
+					}
+				}
+			}
+			return
+		}
+
 	default:
 		printHelp()
 	}
@@ -526,6 +623,7 @@ func printHelp() {
 	fmt.Println("MCPGate — Zero-Trust Model Context Protocol (MCP) Security Gateway & Prompt Injection Firewall")
 	fmt.Println("\nCommands:")
 	fmt.Println("  inspect     Intercept and evaluate a tool call through RBAC, firewall, and secret redaction")
+	fmt.Println("  provenance  Verify Ed25519 request signing, prevent replay attacks, and issue attestation receipts")
 	fmt.Println("  redact      Run ephemeral secret vault, high-entropy detector & bi-directional DLP engine")
 	fmt.Println("  ratelimit   Run dynamic token bucket rate limiter, concurrency governor & burst containment engine")
 	fmt.Println("  injectbench Run standardized MCP prompt injection & tool poisoning security benchmarks")
@@ -536,6 +634,8 @@ func printHelp() {
 	fmt.Println("  audit       Verify cryptographic hash chain integrity of the audit ledger")
 	fmt.Println("  rules       List active security policies, banned patterns, and redaction schemas")
 	fmt.Println("\nExamples:")
+	fmt.Println("  mcpgate provenance [--demo] [--mermaid] [--format text|markdown|json]")
+	fmt.Println("  mcpgate provenance -verify receipt.json")
 	fmt.Println("  mcpgate redact [--demo] [--mode vault|mask|block] [--format text|markdown|json]")
 	fmt.Println("  mcpgate redact -text 'sk-ant-123...' --mode vault")
 	fmt.Println("  mcpgate ratelimit [--demo] [--format text|markdown|json]")
