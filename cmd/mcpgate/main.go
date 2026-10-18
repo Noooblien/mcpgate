@@ -19,6 +19,7 @@ import (
 	"github.com/Noooblien/mcpgate/pkg/proxy"
 	"github.com/Noooblien/mcpgate/pkg/ratelimit"
 	"github.com/Noooblien/mcpgate/pkg/rbac"
+	"github.com/Noooblien/mcpgate/pkg/redact"
 )
 
 func main() {
@@ -433,6 +434,89 @@ func main() {
 			return
 		}
 
+	case "redact":
+		redactCmd := flag.NewFlagSet("redact", flag.ExitOnError)
+		demo := redactCmd.Bool("demo", false, "Run comprehensive DLP and secret vaulting demo scenarios")
+		text := redactCmd.String("text", "", "Text string to scan and redact")
+		agentID := redactCmd.String("agent", "agent-production-01", "Agent identifier")
+		roleStr := redactCmd.String("role", "standard", "Agent role: admin, standard, restricted, readonly")
+		mode := redactCmd.String("mode", "vault", "Enforcement mode: vault | mask | block")
+		detok := redactCmd.String("detokenize", "", "Tokenized text string to detokenize back to plaintext")
+		mermaid := redactCmd.Bool("mermaid", false, "Render Mermaid vault flow diagram")
+		format := redactCmd.String("format", "text", "Output format: text | markdown | json")
+		strict := redactCmd.Bool("strict", false, "Exit with code 1 if secrets blocked by DLP")
+		_ = redactCmd.Parse(os.Args[2:])
+
+		cfg := redact.DefaultDLPConfig()
+		switch *mode {
+		case "mask":
+			cfg.DefaultAction = redact.DLPActionMask
+		case "block":
+			cfg.DefaultAction = redact.DLPActionBlock
+		case "vault":
+			cfg.DefaultAction = redact.DLPActionVault
+		}
+
+		dlp := redact.NewDLPController(cfg)
+
+		if *mermaid {
+			fmt.Println(redact.RenderDLPMermaid())
+			return
+		}
+
+		if *detok != "" {
+			restored, count := dlp.DetokenizeEgress(*detok, *agentID)
+			fmt.Printf("\n🔒 [MCPGate Vault] Detokenized %d secrets for Agent '%s':\n", count, *agentID)
+			fmt.Printf("   Output: %s\n\n", restored)
+			return
+		}
+
+		if *demo || len(os.Args) == 2 {
+			scenarios := redact.DefaultDemoScenarios()
+			var allResults []*redact.DLPResult
+			for _, sc := range scenarios {
+				res := dlp.InspectAndSanitize(sc.Payload, sc.AgentID, sc.Role)
+				allResults = append(allResults, res)
+				if *format == "text" {
+					fmt.Print(redact.RenderDLPScorecard(res, sc.AgentID, cfg.DefaultAction))
+				}
+			}
+
+			switch *format {
+			case "markdown":
+				fmt.Println(redact.RenderMarkdownReport(allResults))
+			case "json":
+				bytes, _ := json.MarshalIndent(allResults, "", "  ")
+				fmt.Println(string(bytes))
+			}
+
+			if *strict {
+				for _, r := range allResults {
+					if !r.Allowed {
+						os.Exit(1)
+					}
+				}
+			}
+			return
+		}
+
+		if *text != "" {
+			role := rbac.AgentRole(*roleStr)
+			res := dlp.InspectAndSanitize(*text, *agentID, role)
+			if *format == "json" {
+				js, _ := res.RenderJSON()
+				fmt.Println(js)
+			} else {
+				fmt.Print(redact.RenderDLPScorecard(res, *agentID, cfg.DefaultAction))
+			}
+			if *strict && !res.Allowed {
+				os.Exit(1)
+			}
+			return
+		}
+
+		fmt.Println("Usage: mcpgate redact [--demo] [-text <string>] [-detokenize <token>] [--mode vault|mask|block] [--mermaid]")
+
 	default:
 		printHelp()
 	}
@@ -442,15 +526,18 @@ func printHelp() {
 	fmt.Println("MCPGate — Zero-Trust Model Context Protocol (MCP) Security Gateway & Prompt Injection Firewall")
 	fmt.Println("\nCommands:")
 	fmt.Println("  inspect     Intercept and evaluate a tool call through RBAC, firewall, and secret redaction")
+	fmt.Println("  redact      Run ephemeral secret vault, high-entropy detector & bi-directional DLP engine")
+	fmt.Println("  ratelimit   Run dynamic token bucket rate limiter, concurrency governor & burst containment engine")
 	fmt.Println("  injectbench Run standardized MCP prompt injection & tool poisoning security benchmarks")
 	fmt.Println("  policy      Evaluate declarative zero-trust policies, lint manifests, or run demo suite")
-	fmt.Println("  ratelimit   Run dynamic token bucket rate limiter, concurrency governor & burst containment engine")
 	fmt.Println("  fuzz        Run adversarial attack fuzzing suite across 8 vulnerability classes")
 	fmt.Println("  proxy       Run inline stdio reverse-proxy intercepting live JSON-RPC 2.0 tool execution")
 	fmt.Println("  serve       Start high-performance HTTP & SSE reverse-proxy for remote MCP servers")
 	fmt.Println("  audit       Verify cryptographic hash chain integrity of the audit ledger")
 	fmt.Println("  rules       List active security policies, banned patterns, and redaction schemas")
 	fmt.Println("\nExamples:")
+	fmt.Println("  mcpgate redact [--demo] [--mode vault|mask|block] [--format text|markdown|json]")
+	fmt.Println("  mcpgate redact -text 'sk-ant-123...' --mode vault")
 	fmt.Println("  mcpgate ratelimit [--demo] [--format text|markdown|json]")
 	fmt.Println("  mcpgate ratelimit check -agent agent_1 -tool bash_exec -cost 1.0")
 	fmt.Println("  mcpgate injectbench [--iter 100] [--strict] [--format text|markdown|json]")
