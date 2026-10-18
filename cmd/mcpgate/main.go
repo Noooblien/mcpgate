@@ -8,11 +8,13 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/Noooblien/mcpgate/pkg/audit"
 	"github.com/Noooblien/mcpgate/pkg/fuzz"
 	"github.com/Noooblien/mcpgate/pkg/gateway"
 	"github.com/Noooblien/mcpgate/pkg/httpproxy"
+	"github.com/Noooblien/mcpgate/pkg/policy"
 	"github.com/Noooblien/mcpgate/pkg/proxy"
 	"github.com/Noooblien/mcpgate/pkg/rbac"
 )
@@ -207,6 +209,113 @@ func main() {
 		}
 		return
 
+	case "policy":
+		policyCmd := flag.NewFlagSet("policy", flag.ExitOnError)
+		policyFile := policyCmd.String("policy", "", "Path to declarative policy JSON manifest")
+		agentID := policyCmd.String("agent", "agent-production-01", "Agent identifier")
+		roleStr := policyCmd.String("role", "standard", "Agent role: admin, standard, restricted, readonly")
+		toolName := policyCmd.String("tool", "read_file", "Target MCP tool name")
+		argsJSON := policyCmd.String("args", "{}", "JSON string of tool call arguments")
+		demo := policyCmd.Bool("demo", false, "Run comprehensive declarative policy test suite")
+		lint := policyCmd.Bool("lint", false, "Lint and validate the policy manifest file")
+		dump := policyCmd.Bool("dump", false, "Dump default zero-trust policy manifest to stdout")
+		mermaid := policyCmd.Bool("mermaid", false, "Render Mermaid policy hierarchy diagram")
+		strict := policyCmd.Bool("strict", false, "Exit with code 1 if any policy check is blocked or violated")
+		// Check positional action in os.Args[2:] (e.g. `mcpgate policy dump` or `mcpgate policy lint -policy ...`)
+		action := ""
+		argsToParse := os.Args[2:]
+		if len(argsToParse) > 0 && !strings.HasPrefix(argsToParse[0], "-") {
+			action = argsToParse[0]
+			argsToParse = argsToParse[1:]
+		}
+		_ = policyCmd.Parse(argsToParse)
+
+		isDump := *dump || action == "dump"
+		isLint := *lint || action == "lint"
+		isDemo := *demo || action == "demo"
+		isMermaid := *mermaid || action == "mermaid"
+
+		var manifest *policy.PolicyManifest
+		if *policyFile != "" {
+			engine, err := policy.LoadFromFile(*policyFile)
+			if err != nil {
+				log.Fatalf("Failed to load policy file %s: %v", *policyFile, err)
+			}
+			manifest = engine.GetManifest()
+		} else {
+			manifest = policy.DefaultZeroTrustPolicy()
+		}
+
+		if isDump {
+			bytes, _ := json.MarshalIndent(manifest, "", "  ")
+			fmt.Println(string(bytes))
+			return
+		}
+
+		if isLint {
+			errs := policy.Validate(manifest)
+			if len(errs) == 0 {
+				fmt.Printf("\n\033[1;32m[PASS]\033[0m Policy manifest '%s' (v%s) is valid (zero errors, %d rules)\n\n", manifest.Metadata.Name, manifest.Metadata.Version, len(manifest.Rules))
+			} else {
+				fmt.Printf("\n\033[1;31m[FAIL]\033[0m Found %d validation errors in policy manifest:\n", len(errs))
+				for _, e := range errs {
+					fmt.Printf("  • %s\n", e)
+				}
+				fmt.Println()
+				if *strict {
+					os.Exit(1)
+				}
+			}
+			return
+		}
+
+		if isMermaid {
+			fmt.Println(policy.RenderPolicyMermaid(manifest))
+			return
+		}
+
+		engine, err := policy.NewEngine(manifest)
+		if err != nil {
+			log.Fatalf("Failed to initialize policy engine: %v", err)
+		}
+
+		if isDemo {
+			scenarios := policy.GenerateDemoScenarios()
+			fmt.Printf("\n\033[1;36m========================================================================================\033[0m\n")
+			fmt.Printf("   \033[1;37mMCPGATE DECLARATIVE SECURITY POLICY DEMO SUITE (%d SCENARIOS)\033[0m\n", len(scenarios))
+			fmt.Printf("\033[1;36m========================================================================================\033[0m\n")
+
+			blockedCount := 0
+			for i, sc := range scenarios {
+				fmt.Printf("\n\033[1;33m[Scenario %d/%d]\033[0m \033[1m%s\033[0m: %s\n", i+1, len(scenarios), sc.Name, sc.Description)
+				dec := engine.Evaluate(sc.Request)
+				fmt.Print(policy.RenderPolicyScorecard(dec, sc.Request))
+				if !dec.Allowed {
+					blockedCount++
+				}
+			}
+			fmt.Printf("\n\033[1;32m✓ Policy Demo Complete.\033[0m Evaluated %d scenarios (%d threats blocked/gated).\n\n", len(scenarios), blockedCount)
+			return
+		}
+
+		var args map[string]interface{}
+		if err := json.Unmarshal([]byte(*argsJSON), &args); err != nil {
+			log.Fatalf("Invalid JSON in -args: %v", err)
+		}
+
+		req := policy.PolicyRequest{
+			AgentID:  *agentID,
+			Role:     rbac.AgentRole(*roleStr),
+			ToolName: *toolName,
+			Args:     args,
+		}
+		decision := engine.Evaluate(req)
+		fmt.Print(policy.RenderPolicyScorecard(decision, req))
+
+		if *strict && !decision.Allowed {
+			os.Exit(1)
+		}
+
 	default:
 		printHelp()
 	}
@@ -216,6 +325,7 @@ func printHelp() {
 	fmt.Println("MCPGate — Zero-Trust Model Context Protocol (MCP) Security Gateway & Prompt Injection Firewall")
 	fmt.Println("\nCommands:")
 	fmt.Println("  inspect     Intercept and evaluate a tool call through RBAC, firewall, and secret redaction")
+	fmt.Println("  policy      Evaluate declarative zero-trust policies, lint manifests, or run demo suite")
 	fmt.Println("  fuzz        Run adversarial attack fuzzing suite across 8 vulnerability classes")
 	fmt.Println("  proxy       Run inline stdio reverse-proxy intercepting live JSON-RPC 2.0 tool execution")
 	fmt.Println("  serve       Start high-performance HTTP & SSE reverse-proxy for remote MCP servers")
@@ -223,6 +333,9 @@ func printHelp() {
 	fmt.Println("  rules       List active security policies, banned patterns, and redaction schemas")
 	fmt.Println("\nExamples:")
 	fmt.Println("  mcpgate inspect -agent agent_1 -role standard -tool read_file -args '{\"path\": \"main.go\"}'")
+	fmt.Println("  mcpgate policy --demo [-strict] [--mermaid]")
+	fmt.Println("  mcpgate policy lint -policy rules.json")
+	fmt.Println("  mcpgate policy eval -agent agent_1 -role standard -tool fetch_url -args '{\"url\": \"http://example.com\"}'")
 	fmt.Println("  mcpgate fuzz [-role standard] [-strict] [-mermaid]")
 	fmt.Println("  mcpgate proxy -agent agent_worker -role standard")
 	fmt.Println("  mcpgate serve --port 8089 --upstream http://localhost:8080")

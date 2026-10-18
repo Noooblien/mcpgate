@@ -8,6 +8,7 @@ import (
 
 	"github.com/Noooblien/mcpgate/pkg/audit"
 	"github.com/Noooblien/mcpgate/pkg/firewall"
+	"github.com/Noooblien/mcpgate/pkg/policy"
 	"github.com/Noooblien/mcpgate/pkg/ratelimit"
 	"github.com/Noooblien/mcpgate/pkg/rbac"
 	"github.com/Noooblien/mcpgate/pkg/redact"
@@ -21,6 +22,7 @@ type GatewayConfig struct {
 	BurstSize     int
 	AuditLogPath  string
 	CanaryTokens  []string
+	PolicyEngine  *policy.PolicyEngine
 }
 
 // SecurityVerdict encapsulates the outcome of an intercepted MCP tool request.
@@ -31,6 +33,7 @@ type SecurityVerdict struct {
 	FirewallResult *firewall.FirewallResult  `json:"firewall_result,omitempty"`
 	RedactResult   *redact.RedactResult      `json:"redact_result,omitempty"`
 	RBACDecision   *rbac.RBACDecision        `json:"rbac_decision,omitempty"`
+	PolicyDecision *policy.PolicyDecision    `json:"policy_decision,omitempty"`
 	SanitizedArgs  map[string]interface{}    `json:"sanitized_args"`
 	LatencyMs      int64                     `json:"latency_ms"`
 	EventID        string                    `json:"event_id"`
@@ -38,12 +41,13 @@ type SecurityVerdict struct {
 
 // MCPGate is the central zero-trust security gateway.
 type MCPGate struct {
-	cfg      GatewayConfig
-	firewall *firewall.FirewallEngine
-	redactor *redact.Redactor
-	rbac     *rbac.RBACManager
-	limiter  *ratelimit.TokenBucketLimiter
-	audit    *audit.AuditLedger
+	cfg          GatewayConfig
+	firewall     *firewall.FirewallEngine
+	redactor     *redact.Redactor
+	rbac         *rbac.RBACManager
+	policyEngine *policy.PolicyEngine
+	limiter      *ratelimit.TokenBucketLimiter
+	audit        *audit.AuditLedger
 }
 
 // NewMCPGate constructs an initialized security gateway.
@@ -62,13 +66,24 @@ func NewMCPGate(cfg GatewayConfig) (*MCPGate, error) {
 	})
 
 	return &MCPGate{
-		cfg:      cfg,
-		firewall: fw,
-		redactor: rd,
-		rbac:     rb,
-		limiter:  lm,
-		audit:    ledger,
+		cfg:          cfg,
+		firewall:     fw,
+		redactor:     rd,
+		rbac:         rb,
+		policyEngine: cfg.PolicyEngine,
+		limiter:      lm,
+		audit:        ledger,
 	}, nil
+}
+
+// SetPolicyEngine overrides or hot-swaps the declarative policy engine.
+func (g *MCPGate) SetPolicyEngine(pe *policy.PolicyEngine) {
+	g.policyEngine = pe
+}
+
+// GetPolicyEngine returns the configured declarative policy engine.
+func (g *MCPGate) GetPolicyEngine() *policy.PolicyEngine {
+	return g.policyEngine
 }
 
 // GetRBAC returns the underlying RBAC manager for custom rule configuration.
@@ -101,20 +116,59 @@ func (g *MCPGate) InterceptToolCall(agentID string, role rbac.AgentRole, toolNam
 		return verdict
 	}
 
-	// Phase 2: RBAC Authorization
-	rbacDec := g.rbac.Authorize(role, toolName, args)
-	if !rbacDec.Allowed {
-		verdict := SecurityVerdict{
-			Allowed:       false,
-			Verdict:       spec.VerdictBlock,
-			BlockReason:   fmt.Sprintf("RBAC Authorization Denied: %s (%s)", rbacDec.Reason, rbacDec.ViolationRule),
-			RBACDecision:  &rbacDec,
-			SanitizedArgs: args,
-			LatencyMs:     time.Since(start).Milliseconds(),
-			EventID:       eventID,
+	// Phase 2: Zero-Trust Declarative Policy & RBAC Authorization
+	var rbacDec rbac.RBACDecision
+	var policyDec *policy.PolicyDecision
+	if g.policyEngine != nil {
+		pDec := g.policyEngine.Evaluate(policy.PolicyRequest{
+			AgentID:   agentID,
+			Role:      role,
+			ToolName:  toolName,
+			Args:      args,
+			Timestamp: start,
+		})
+		policyDec = &pDec
+		if !pDec.Allowed {
+			verdict := SecurityVerdict{
+				Allowed:        false,
+				Verdict:        spec.VerdictBlock,
+				BlockReason:    fmt.Sprintf("Declarative Policy Denied: %s (Rule: %s)", pDec.Reason, pDec.MatchedRuleID),
+				PolicyDecision: policyDec,
+				SanitizedArgs:  args,
+				LatencyMs:      time.Since(start).Milliseconds(),
+				EventID:        eventID,
+			}
+			g.recordAudit(eventID, agentID, string(role), toolName, spec.VerdictBlock, verdict.BlockReason, 0, verdict.LatencyMs)
+			return verdict
 		}
-		g.recordAudit(eventID, agentID, string(role), toolName, spec.VerdictBlock, verdict.BlockReason, 0, verdict.LatencyMs)
-		return verdict
+		if pDec.RequireApproval {
+			verdict := SecurityVerdict{
+				Allowed:        false,
+				Verdict:        spec.VerdictAudit,
+				BlockReason:    fmt.Sprintf("Approval Required: %s (Rule: %s)", pDec.Reason, pDec.MatchedRuleID),
+				PolicyDecision: policyDec,
+				SanitizedArgs:  args,
+				LatencyMs:      time.Since(start).Milliseconds(),
+				EventID:        eventID,
+			}
+			g.recordAudit(eventID, agentID, string(role), toolName, spec.VerdictAudit, verdict.BlockReason, 0, verdict.LatencyMs)
+			return verdict
+		}
+	} else {
+		rbacDec = g.rbac.Authorize(role, toolName, args)
+		if !rbacDec.Allowed {
+			verdict := SecurityVerdict{
+				Allowed:       false,
+				Verdict:       spec.VerdictBlock,
+				BlockReason:   fmt.Sprintf("RBAC Authorization Denied: %s (%s)", rbacDec.Reason, rbacDec.ViolationRule),
+				RBACDecision:  &rbacDec,
+				SanitizedArgs: args,
+				LatencyMs:     time.Since(start).Milliseconds(),
+				EventID:       eventID,
+			}
+			g.recordAudit(eventID, agentID, string(role), toolName, spec.VerdictBlock, verdict.BlockReason, 0, verdict.LatencyMs)
+			return verdict
+		}
 	}
 
 	// Phase 3: Prompt Injection Firewall
@@ -167,6 +221,7 @@ func (g *MCPGate) InterceptToolCall(agentID string, role rbac.AgentRole, toolNam
 		Allowed:        true,
 		Verdict:        finalVerdict,
 		RBACDecision:   &rbacDec,
+		PolicyDecision: policyDec,
 		FirewallResult: &combinedFirewall,
 		SanitizedArgs:  sanitizedArgs,
 		LatencyMs:      time.Since(start).Milliseconds(),
@@ -219,7 +274,15 @@ func RenderGateScorecard(verdict SecurityVerdict, agentID string, toolName strin
 	sb.WriteString("\033[1;34m----------------------------------------------------------------------------------------\033[0m\n")
 
 	sb.WriteString("\033[1;37m  DEFENSE-IN-DEPTH LAYER BREAKDOWN:\033[0m\n")
-	if verdict.RBACDecision != nil {
+	if verdict.PolicyDecision != nil {
+		pStatus := "\033[1;32mAUTHORIZED\033[0m"
+		if !verdict.PolicyDecision.Allowed {
+			pStatus = "\033[1;31mDENIED\033[0m"
+		} else if verdict.PolicyDecision.RequireApproval {
+			pStatus = "\033[1;33mAPPROVAL REQUIRED\033[0m"
+		}
+		sb.WriteString(fmt.Sprintf("  - Layer 1 (Declarative Policy):     %s (%s: %s)\n", pStatus, verdict.PolicyDecision.Action, verdict.PolicyDecision.MatchedRuleID))
+	} else if verdict.RBACDecision != nil {
 		rbacStatus := "\033[1;32mAUTHORIZED\033[0m"
 		if !verdict.RBACDecision.Allowed {
 			rbacStatus = "\033[1;31mDENIED\033[0m"

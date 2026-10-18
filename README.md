@@ -71,6 +71,18 @@ curl http://localhost:8089/metrics
 mcpgate audit -strict
 ```
 
+### Evaluate Declarative Zero-Trust Policies
+```bash
+# Run comprehensive policy demo suite across 5 scenarios
+mcpgate policy --demo
+
+# Lint a custom policy manifest file
+mcpgate policy lint -policy policy.json
+
+# Render Mermaid policy hierarchy flowchart
+mcpgate policy --mermaid
+```
+
 ### Run Adversarial Security Fuzzer
 ```bash
 # Execute 8-vector attack suite and generate ANSI scorecard
@@ -92,6 +104,7 @@ mcpgate rules
 - [x] Zero-Trust Prompt Injection Firewall & Direct Jailbreak Detectors
 - [x] Secret & Sensitive Token Redactor (Luhn Credit Cards, API Keys, Private Keys, HMAC Pseudonymization)
 - [x] Dynamic Role-Based Access Control (RBAC) & Global SSRF/Traverse Guardrails
+- [x] Declarative Zero-Trust Policy Engine & Manifest Linter (`mcpgate policy`)
 - [x] High-Throughput Token Bucket Rate Limiter
 - [x] Cryptographic Hash Chain Audit Ledger
 - [x] Transparent Stdio Reverse-Proxy (`mcpgate proxy`)
