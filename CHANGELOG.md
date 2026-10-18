@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Ephemeral Secret Vault & Bi-Directional DLP Engine (`pkg/redact`)**: In-memory thread-safe vault with agent tenant isolation, configurable lease TTLs, deterministic surrogate token generation (`[[VAULT:<CAT>:<HEX>]]`), and zero-leak detokenization.
+- **Shannon Entropy Scanner (`entropy.go`)**: Information-theoretic entropy detector ($H(X) \ge 4.3$) identifying unstructured high-entropy credentials, private keys, and connection strings while excluding structured tokens.
+- **Role-Based Data Loss Prevention Policies**: Enforces `VAULT`, `MASK`, `BLOCK`, and `ALLOW` modes with privilege escalation prevention for restricted agent roles.
+- **CLI Subcommand & DLP Scorecards (`mcpgate redact`)**: Terminal ANSI DLP scorecards, Mermaid tokenization sequence diagrams (`--mermaid`), interactive string redaction/detokenization, and multi-provider demo (`--demo`).
 - **Declarative Zero-Trust Policy Engine (`pkg/policy`)**: Specification-driven policy evaluation engine with priority resolution, glob tool/agent matching, field-level argument constraints, and temporal execution windows.
 - **Enterprise Policy Actions**: Support for `ALLOW`, `DENY`, `REQUIRE_APPROVAL` (Human-in-the-Loop / 2FA gate), and `FORCE_REDACTION` with dynamic per-rule rate limiting overrides.
 - **Dynamic Hot-Reloading & Manifest Linter**: Thread-safe policy manifest swapping and syntax/logic linter (`mcpgate policy lint`).

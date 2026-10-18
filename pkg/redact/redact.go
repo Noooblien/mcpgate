@@ -92,7 +92,7 @@ func NewRedactor(secretKey string) *Redactor {
 			ID:         "SEC-PRIV-KEY",
 			Name:       "Private Cryptographic Key",
 			Category:   CategoryPrivateKey,
-			Regex:      regexp.MustCompile(`-----BEGIN [A-Z ]+PRIVATE KEY-----[a-zA-Z0-9\s+/=]+-----END [A-Z ]+PRIVATE KEY-----`),
+			Regex:      regexp.MustCompile(`(?s)-----BEGIN [A-Z ]+PRIVATE KEY-----.*?-----END [A-Z ]+PRIVATE KEY-----`),
 			MaskFormat: "[REDACTED_PRIVATE_KEY_BLOCK]",
 		},
 		{
