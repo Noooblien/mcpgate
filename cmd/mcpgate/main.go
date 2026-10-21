@@ -22,6 +22,7 @@ import (
 	"github.com/Noooblien/mcpgate/pkg/ratelimit"
 	"github.com/Noooblien/mcpgate/pkg/rbac"
 	"github.com/Noooblien/mcpgate/pkg/redact"
+	"github.com/Noooblien/mcpgate/pkg/risk"
 )
 
 func main() {
@@ -614,6 +615,84 @@ func main() {
 			return
 		}
 
+	case "risk":
+		riskCmd := flag.NewFlagSet("risk", flag.ExitOnError)
+		demo := riskCmd.Bool("demo", false, "Run comprehensive adaptive blast radius & cumulative risk scenarios")
+		check := riskCmd.Bool("check", false, "Assess risk for a proposed tool execution")
+		sessionID := riskCmd.String("session", "session-default-01", "Session identifier")
+		agentID := riskCmd.String("agent", "agent-production-01", "Agent identifier")
+		roleStr := riskCmd.String("role", "standard", "Agent role: admin, standard, restricted, readonly")
+		toolName := riskCmd.String("tool", "read_file", "Target MCP tool name")
+		argsJSON := riskCmd.String("args", "{}", "JSON string of tool call arguments")
+		budget := riskCmd.Float64("budget", 100.0, "Session blast radius budget in points")
+		mermaid := riskCmd.Bool("mermaid", false, "Render Mermaid blast radius flowchart diagram")
+		format := riskCmd.String("format", "text", "Output format: text | markdown | json")
+		strict := riskCmd.Bool("strict", false, "Exit with code 1 if quarantined or step-up approval required")
+		_ = riskCmd.Parse(os.Args[2:])
+
+		cfg := risk.DefaultRiskGovernorConfig()
+		if *budget > 0 {
+			cfg.SessionRiskBudget = *budget
+		}
+		governor := risk.NewRiskGovernor(cfg, risk.NewToolScorer())
+
+		if *demo || (!*check && *argsJSON == "{}" && *toolName == "read_file" && len(os.Args) <= 2) {
+			assessments, err := risk.RunDemoSuite()
+			if err != nil {
+				log.Fatalf("Risk demo execution failed: %v", err)
+			}
+
+			switch *format {
+			case "markdown":
+				fmt.Println(risk.RenderMarkdownReport(assessments))
+			case "json":
+				bytes, _ := json.MarshalIndent(assessments, "", "  ")
+				fmt.Println(string(bytes))
+			default:
+				for _, a := range assessments {
+					fmt.Print(risk.RenderRiskScorecard(a))
+					if *mermaid {
+						fmt.Println(risk.RenderRiskMermaid(a))
+					}
+				}
+			}
+
+			if *strict {
+				for _, a := range assessments {
+					if a.Verdict == risk.VerdictQuarantinedBlock {
+						os.Exit(1)
+					}
+				}
+			}
+			return
+		}
+
+		var args map[string]interface{}
+		if err := json.Unmarshal([]byte(*argsJSON), &args); err != nil {
+			log.Fatalf("Invalid JSON in -args: %v", err)
+		}
+
+		role := rbac.AgentRole(*roleStr)
+		assessment := governor.AssessToolCall(*sessionID, *agentID, role, *toolName, args)
+
+		switch *format {
+		case "markdown":
+			fmt.Println(risk.RenderMarkdownReport([]*risk.RiskAssessment{assessment}))
+		case "json":
+			bytes, _ := json.MarshalIndent(assessment, "", "  ")
+			fmt.Println(string(bytes))
+		default:
+			fmt.Print(risk.RenderRiskScorecard(assessment))
+			if *mermaid {
+				fmt.Println(risk.RenderRiskMermaid(assessment))
+			}
+		}
+
+		if *strict && (assessment.Verdict == risk.VerdictQuarantinedBlock || assessment.Verdict == risk.VerdictStepUpApproval) {
+			os.Exit(1)
+		}
+		return
+
 	default:
 		printHelp()
 	}
@@ -623,6 +702,7 @@ func printHelp() {
 	fmt.Println("MCPGate — Zero-Trust Model Context Protocol (MCP) Security Gateway & Prompt Injection Firewall")
 	fmt.Println("\nCommands:")
 	fmt.Println("  inspect     Intercept and evaluate a tool call through RBAC, firewall, and secret redaction")
+	fmt.Println("  risk        Evaluate multi-dimensional blast radius, velocity burst containment & cumulative session risk")
 	fmt.Println("  provenance  Verify Ed25519 request signing, prevent replay attacks, and issue attestation receipts")
 	fmt.Println("  redact      Run ephemeral secret vault, high-entropy detector & bi-directional DLP engine")
 	fmt.Println("  ratelimit   Run dynamic token bucket rate limiter, concurrency governor & burst containment engine")
@@ -634,6 +714,8 @@ func printHelp() {
 	fmt.Println("  audit       Verify cryptographic hash chain integrity of the audit ledger")
 	fmt.Println("  rules       List active security policies, banned patterns, and redaction schemas")
 	fmt.Println("\nExamples:")
+	fmt.Println("  mcpgate risk [--demo] [--mermaid] [--format text|markdown|json]")
+	fmt.Println("  mcpgate risk -check -agent agent_1 -role standard -tool bash_exec -args '{\"cmd\": \"rm -rf /\"}'")
 	fmt.Println("  mcpgate provenance [--demo] [--mermaid] [--format text|markdown|json]")
 	fmt.Println("  mcpgate provenance -verify receipt.json")
 	fmt.Println("  mcpgate redact [--demo] [--mode vault|mask|block] [--format text|markdown|json]")

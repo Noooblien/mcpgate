@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Adaptive Blast Radius Governor & Cumulative Risk Scoring Engine (`pkg/risk`)**: Multi-dimensional blast radius surface evaluation for Model Context Protocol (MCP) tool execution, defending against OWASP-LLM06 (Excessive Agency) and OWASP-LLM08 (Cascading Failures).
+- **Multi-Vector Risk Surface Modeling**: Real-time scoring across 6 impact dimensions: `Filesystem Mutation`, `Network Egress`, `Financial Cost`, `Privilege Escalation`, `Data Exfiltration`, and `Irreversibility`.
+- **Stateful Session Risk Tracking & Exponential Half-Life Decay**: Tracks cumulative session risk points ($Score \times 2^{-\Delta t / t_{1/2}}$) with configurable decay kinetics (default 15m half-life) allowing autonomous recovery for well-behaved agents.
+- **Runaway Velocity Burst Quarantine**: Sliding-window velocity detector identifying prompt-injection hijack bursts and rapid destructive call loops, instantly locking sessions into quarantine (`QUARANTINED_BLOCK`).
+- **Dynamic Step-Up Human-in-the-Loop Gating**: Evaluates hazardous arguments (destructive `rm -rf`, root filesystem access, cloud metadata SSRF, transactions > $1,000) and triggers mandatory confirmation (`STEP_UP_APPROVAL`).
+- **CLI Subcommand & Scorecard Visualizations (`mcpgate risk`)**: Rich terminal ANSI scorecards with real-time budget consumption gauges, Mermaid flowchart generators (`--mermaid`), JSON exports, and Markdown compliance reports (`--demo`, `--check`).
 - **Cryptographic Tool Provenance, Mutual Request Signing & Non-Repudiation Engine (`pkg/provenance`)**: End-to-end zero-trust request signing with Ed25519 digital signatures, canonical JSON argument hashing, and tamper-proof verification (`mcpgate provenance`).
 - **Gateway Execution Attestation Receipts**: Mints cryptographically signed, verifiable Execution Attestation Receipts linking request signatures, arguments digests, response hashes, and verdicts for non-repudiation audit trails.
 - **Replay Attack & Clock Skew Guardrails**: Sliding-window cryptographic nonce verification with automatic TTL eviction and strict clock skew tolerance ($\pm 30\text{s}$).

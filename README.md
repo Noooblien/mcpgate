@@ -146,6 +146,21 @@ mcpgate provenance -verify receipt.json
 mcpgate provenance --demo --format markdown
 ```
 
+### Adaptive Blast Radius Governor & Cumulative Risk Engine (`mcpgate risk`)
+```bash
+# Run comprehensive multi-scenario blast radius governance demonstration:
+mcpgate risk --demo
+
+# Evaluate a specific tool call with multi-dimensional risk scoring:
+mcpgate risk -check -agent agent-dev-01 -role standard -tool bash_exec -args '{"cmd": "rm -rf /var/log"}'
+
+# Export Markdown risk compliance report:
+mcpgate risk --demo --format markdown
+
+# Render Mermaid blast radius governance flowchart:
+mcpgate risk --demo --mermaid
+```
+
 ### View Active Security Rules
 ```bash
 mcpgate rules
