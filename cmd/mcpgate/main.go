@@ -14,6 +14,7 @@ import (
 	"github.com/Noooblien/mcpgate/pkg/audit"
 	"github.com/Noooblien/mcpgate/pkg/fuzz"
 	"github.com/Noooblien/mcpgate/pkg/gateway"
+	"github.com/Noooblien/mcpgate/pkg/honeypot"
 	"github.com/Noooblien/mcpgate/pkg/httpproxy"
 	"github.com/Noooblien/mcpgate/pkg/injectbench"
 	"github.com/Noooblien/mcpgate/pkg/policy"
@@ -693,6 +694,96 @@ func main() {
 		}
 		return
 
+	case "honeypot":
+		hpCmd := flag.NewFlagSet("honeypot", flag.ExitOnError)
+		demo := hpCmd.Bool("demo", false, "Run comprehensive canary tool probe and deception defense scenarios")
+		check := hpCmd.Bool("check", false, "Intercept a tool call through the honeypot deception engine")
+		sessionID := hpCmd.String("session", "sess-prod-01", "Session identifier")
+		agentID := hpCmd.String("agent", "agent-production-01", "Agent identifier")
+		roleStr := hpCmd.String("role", "standard", "Agent role: admin, standard, restricted, readonly")
+		toolName := hpCmd.String("tool", "admin_export_vault_credentials", "Target MCP tool name")
+		argsJSON := hpCmd.String("args", "{}", "JSON string of tool call arguments")
+		mode := hpCmd.String("mode", "honeyed", "Deception mode: honeyed | error | quarantine | tarpit")
+		mermaid := hpCmd.Bool("mermaid", false, "Render Mermaid sequence diagram of forensic trap")
+		format := hpCmd.String("format", "text", "Output format: text | markdown | json")
+		strict := hpCmd.Bool("strict", false, "Exit with code 1 if honeypot tripped or session quarantined")
+		_ = hpCmd.Parse(os.Args[2:])
+
+		var decMode honeypot.DeceptionMode
+		switch *mode {
+		case "error":
+			decMode = honeypot.ModeSyntheticError
+		case "quarantine":
+			decMode = honeypot.ModeHardQuarantine
+		case "tarpit":
+			decMode = honeypot.ModeTarpit
+		default:
+			decMode = honeypot.ModeHoneyedPayload
+		}
+
+		cfg := honeypot.HoneypotConfig{
+			Enabled:               true,
+			DefaultDeceptionMode:  decMode,
+			AutoQuarantineSession: true,
+			TarpitDelay:           0,
+		}
+		engine := honeypot.NewEngine(cfg)
+
+		if *demo || (!*check && *argsJSON == "{}" && *toolName == "admin_export_vault_credentials" && len(os.Args) <= 2) {
+			summary, verdicts, err := honeypot.RunDemoSuite()
+			if err != nil {
+				log.Fatalf("Honeypot demo execution failed: %v", err)
+			}
+
+			switch *format {
+			case "markdown":
+				fmt.Println(honeypot.RenderMarkdownReport(summary))
+			case "json":
+				jsonStr, _ := summary.RenderJSON()
+				fmt.Println(jsonStr)
+			default:
+				scenarios := honeypot.GetDemoScenarios()
+				for i, v := range verdicts {
+					sc := scenarios[i]
+					fmt.Print(honeypot.RenderHoneypotScorecard(v, sc.SessionID, sc.AgentID, sc.ToolName))
+					if *mermaid {
+						fmt.Println(honeypot.RenderHoneypotMermaid(v.TrapEvent))
+					}
+				}
+				fmt.Printf("\n\033[1;32m✓ Honeypot Demo Complete.\033[0m Evaluated %d scenarios (%d traps triggered, %d sessions quarantined).\n\n",
+					summary.TotalEvaluated, summary.TrapsTriggered, summary.SessionsLocked)
+			}
+
+			if *strict && summary.TrapsTriggered > 0 {
+				os.Exit(1)
+			}
+			return
+		}
+
+		var args map[string]interface{}
+		if err := json.Unmarshal([]byte(*argsJSON), &args); err != nil {
+			log.Fatalf("Invalid JSON in -args: %v", err)
+		}
+
+		role := rbac.AgentRole(*roleStr)
+		verdict := engine.InterceptToolCall(*sessionID, *agentID, role, *toolName, args)
+
+		switch *format {
+		case "json":
+			bytes, _ := json.MarshalIndent(verdict, "", "  ")
+			fmt.Println(string(bytes))
+		default:
+			fmt.Print(honeypot.RenderHoneypotScorecard(verdict, *sessionID, *agentID, *toolName))
+			if *mermaid {
+				fmt.Println(honeypot.RenderHoneypotMermaid(verdict.TrapEvent))
+			}
+		}
+
+		if *strict && (verdict.IsHoneypotHit || verdict.SessionLocked) {
+			os.Exit(1)
+		}
+		return
+
 	default:
 		printHelp()
 	}
@@ -702,6 +793,7 @@ func printHelp() {
 	fmt.Println("MCPGate — Zero-Trust Model Context Protocol (MCP) Security Gateway & Prompt Injection Firewall")
 	fmt.Println("\nCommands:")
 	fmt.Println("  inspect     Intercept and evaluate a tool call through RBAC, firewall, and secret redaction")
+	fmt.Println("  honeypot    Deploy canary honeytools, detect token exfiltration & synthesize deceptive responses")
 	fmt.Println("  risk        Evaluate multi-dimensional blast radius, velocity burst containment & cumulative session risk")
 	fmt.Println("  provenance  Verify Ed25519 request signing, prevent replay attacks, and issue attestation receipts")
 	fmt.Println("  redact      Run ephemeral secret vault, high-entropy detector & bi-directional DLP engine")
@@ -714,6 +806,8 @@ func printHelp() {
 	fmt.Println("  audit       Verify cryptographic hash chain integrity of the audit ledger")
 	fmt.Println("  rules       List active security policies, banned patterns, and redaction schemas")
 	fmt.Println("\nExamples:")
+	fmt.Println("  mcpgate honeypot [--demo] [--mermaid] [--format text|markdown|json]")
+	fmt.Println("  mcpgate honeypot -check -session sess_1 -agent agent_1 -tool admin_export_vault_credentials")
 	fmt.Println("  mcpgate risk [--demo] [--mermaid] [--format text|markdown|json]")
 	fmt.Println("  mcpgate risk -check -agent agent_1 -role standard -tool bash_exec -args '{\"cmd\": \"rm -rf /\"}'")
 	fmt.Println("  mcpgate provenance [--demo] [--mermaid] [--format text|markdown|json]")
