@@ -17,12 +17,14 @@ import (
 
 // GatewayConfig holds configuration parameters for the MCP gateway.
 type GatewayConfig struct {
-	HMACSeed      string
-	MaxRPM        int
-	BurstSize     int
-	AuditLogPath  string
-	CanaryTokens  []string
-	PolicyEngine  *policy.PolicyEngine
+	HMACSeed               string
+	MaxRPM                 int
+	BurstSize              int
+	AuditLogPath           string
+	CanaryTokens           []string
+	PolicyEngine           *policy.PolicyEngine
+	LoopDetectorWindow     int
+	LoopDetectorMaxRep     int
 }
 
 // SecurityVerdict encapsulates the outcome of an intercepted MCP tool request.
@@ -43,6 +45,7 @@ type SecurityVerdict struct {
 type MCPGate struct {
 	cfg          GatewayConfig
 	firewall     *firewall.FirewallEngine
+	loopDetector *firewall.AgentLoopDetector
 	redactor     *redact.Redactor
 	rbac         *rbac.RBACManager
 	policyEngine *policy.PolicyEngine
@@ -65,9 +68,12 @@ func NewMCPGate(cfg GatewayConfig) (*MCPGate, error) {
 		Burst:  cfg.BurstSize,
 	})
 
+	ld := firewall.NewAgentLoopDetector(cfg.LoopDetectorWindow, cfg.LoopDetectorMaxRep, 10*time.Minute)
+
 	return &MCPGate{
 		cfg:          cfg,
 		firewall:     fw,
+		loopDetector: ld,
 		redactor:     rd,
 		rbac:         rb,
 		policyEngine: cfg.PolicyEngine,
@@ -96,6 +102,11 @@ func (g *MCPGate) GetLimiter() *ratelimit.TokenBucketLimiter {
 	return g.limiter
 }
 
+// GetLoopDetector returns the agent loop detector.
+func (g *MCPGate) GetLoopDetector() *firewall.AgentLoopDetector {
+	return g.loopDetector
+}
+
 // RedactObject exposes recursive secret redaction for response/stream payload scrubbing.
 func (g *MCPGate) RedactObject(data interface{}) (interface{}, int) {
 	return g.redactor.RedactObject(data)
@@ -106,6 +117,22 @@ func (g *MCPGate) RedactObject(data interface{}) (interface{}, int) {
 func (g *MCPGate) InterceptToolCall(agentID string, role rbac.AgentRole, toolName string, args map[string]interface{}) SecurityVerdict {
 	start := time.Now()
 	eventID := fmt.Sprintf("evt_%d", time.Now().UnixNano())
+
+	// Phase 1.5: Recursive Loop & Runaway Tool Shield (OWASP-LLM08)
+	if g.loopDetector != nil {
+		if isLoop, loopReason := g.loopDetector.RecordAndCheck(agentID, toolName, args); isLoop {
+			verdict := SecurityVerdict{
+				Allowed:       false,
+				Verdict:       spec.VerdictBlock,
+				BlockReason:   loopReason,
+				SanitizedArgs: args,
+				LatencyMs:     time.Since(start).Milliseconds(),
+				EventID:       eventID,
+			}
+			g.recordAudit(eventID, agentID, string(role), toolName, spec.VerdictBlock, verdict.BlockReason, 0, verdict.LatencyMs)
+			return verdict
+		}
+	}
 
 	// Phase 1: Rate Limiting & Concurrency Governor
 	if dec, err := g.limiter.AllowTool(agentID, toolName, 1.0); !dec.Allowed {

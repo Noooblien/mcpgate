@@ -281,3 +281,39 @@ func TestStdioProxy_ProcessLine(t *testing.T) {
 	}
 }
 
+
+func TestGateway_LoopDetectorInterception(t *testing.T) {
+	tmpAudit := "./.audit/test_gw_loop.jsonl"
+	defer os.RemoveAll(tmpAudit)
+
+	gate, err := gateway.NewMCPGate(gateway.GatewayConfig{
+		HMACSeed:           "gw-loop-test-seed",
+		MaxRPM:             100,
+		BurstSize:          20,
+		AuditLogPath:       tmpAudit,
+		LoopDetectorWindow: 5,
+		LoopDetectorMaxRep: 3,
+	})
+	if err != nil {
+		t.Fatalf("failed to init gate: %v", err)
+	}
+
+	callArgs := map[string]interface{}{"path": "status.txt"}
+
+	// 1st, 2nd, 3rd calls: ALLOWED
+	for i := 0; i < 3; i++ {
+		v := gate.InterceptToolCall("agent_loop_test", rbac.RoleStandard, "read_file", callArgs)
+		if !v.Allowed || v.Verdict != spec.VerdictAllow {
+			t.Fatalf("call %d expected allowed, got verdict: %s", i+1, v.Verdict)
+		}
+	}
+
+	// 4th identical call: BLOCKED by loop detector (OWASP-LLM08)
+	vBlocked := gate.InterceptToolCall("agent_loop_test", rbac.RoleStandard, "read_file", callArgs)
+	if vBlocked.Allowed || vBlocked.Verdict != spec.VerdictBlock {
+		t.Fatalf("expected 4th call to be blocked, got: %s", vBlocked.Verdict)
+	}
+	if !strings.Contains(vBlocked.BlockReason, "infinite tool execution loop detected") {
+		t.Errorf("expected loop detection block reason, got: %s", vBlocked.BlockReason)
+	}
+}
