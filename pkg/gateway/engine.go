@@ -12,6 +12,7 @@ import (
 	"github.com/Noooblien/mcpgate/pkg/ratelimit"
 	"github.com/Noooblien/mcpgate/pkg/rbac"
 	"github.com/Noooblien/mcpgate/pkg/redact"
+	"github.com/Noooblien/mcpgate/pkg/schema"
 	"github.com/Noooblien/mcpgate/pkg/spec"
 )
 
@@ -25,6 +26,7 @@ type GatewayConfig struct {
 	PolicyEngine           *policy.PolicyEngine
 	LoopDetectorWindow     int
 	LoopDetectorMaxRep     int
+	SchemaRegistry         *schema.SchemaRegistry
 }
 
 // SecurityVerdict encapsulates the outcome of an intercepted MCP tool request.
@@ -36,6 +38,7 @@ type SecurityVerdict struct {
 	RedactResult   *redact.RedactResult      `json:"redact_result,omitempty"`
 	RBACDecision   *rbac.RBACDecision        `json:"rbac_decision,omitempty"`
 	PolicyDecision *policy.PolicyDecision    `json:"policy_decision,omitempty"`
+	SchemaResult   *schema.SchemaValidationResult `json:"schema_result,omitempty"`
 	SanitizedArgs  map[string]interface{}    `json:"sanitized_args"`
 	LatencyMs      int64                     `json:"latency_ms"`
 	EventID        string                    `json:"event_id"`
@@ -46,6 +49,7 @@ type MCPGate struct {
 	cfg          GatewayConfig
 	firewall     *firewall.FirewallEngine
 	loopDetector *firewall.AgentLoopDetector
+	schemaReg    *schema.SchemaRegistry
 	redactor     *redact.Redactor
 	rbac         *rbac.RBACManager
 	policyEngine *policy.PolicyEngine
@@ -69,11 +73,13 @@ func NewMCPGate(cfg GatewayConfig) (*MCPGate, error) {
 	})
 
 	ld := firewall.NewAgentLoopDetector(cfg.LoopDetectorWindow, cfg.LoopDetectorMaxRep, 10*time.Minute)
+	sr := cfg.SchemaRegistry
 
 	return &MCPGate{
 		cfg:          cfg,
 		firewall:     fw,
 		loopDetector: ld,
+		schemaReg:    sr,
 		redactor:     rd,
 		rbac:         rb,
 		policyEngine: cfg.PolicyEngine,
@@ -105,6 +111,11 @@ func (g *MCPGate) GetLimiter() *ratelimit.TokenBucketLimiter {
 // GetLoopDetector returns the agent loop detector.
 func (g *MCPGate) GetLoopDetector() *firewall.AgentLoopDetector {
 	return g.loopDetector
+}
+
+// GetSchemaRegistry returns the underlying tool schema registry.
+func (g *MCPGate) GetSchemaRegistry() *schema.SchemaRegistry {
+	return g.schemaReg
 }
 
 // RedactObject exposes recursive secret redaction for response/stream payload scrubbing.
@@ -146,6 +157,33 @@ func (g *MCPGate) InterceptToolCall(agentID string, role rbac.AgentRole, toolNam
 		}
 		g.recordAudit(eventID, agentID, string(role), toolName, spec.VerdictBlock, verdict.BlockReason, 0, verdict.LatencyMs)
 		return verdict
+	}
+
+	// Phase 1.8: MCP Tool Input Schema Validation
+	var schemaRes *schema.SchemaValidationResult
+	if g.schemaReg != nil {
+		sRes := g.schemaReg.ValidateArguments(toolName, args)
+		schemaRes = &sRes
+		if !sRes.Valid {
+			errsSummary := ""
+			for idx, e := range sRes.Errors {
+				if idx > 0 {
+					errsSummary += "; "
+				}
+				errsSummary += fmt.Sprintf("[%s] %s", e.Field, e.Description)
+			}
+			verdict := SecurityVerdict{
+				Allowed:       false,
+				Verdict:       spec.VerdictBlock,
+				BlockReason:   fmt.Sprintf("Schema Validation Denied: %s", errsSummary),
+				SchemaResult:  schemaRes,
+				SanitizedArgs: args,
+				LatencyMs:     time.Since(start).Milliseconds(),
+				EventID:       eventID,
+			}
+			g.recordAudit(eventID, agentID, string(role), toolName, spec.VerdictBlock, verdict.BlockReason, 0, verdict.LatencyMs)
+			return verdict
+		}
 	}
 
 	// Phase 2: Zero-Trust Declarative Policy & RBAC Authorization
@@ -254,6 +292,7 @@ func (g *MCPGate) InterceptToolCall(agentID string, role rbac.AgentRole, toolNam
 		Verdict:        finalVerdict,
 		RBACDecision:   &rbacDec,
 		PolicyDecision: policyDec,
+		SchemaResult:   schemaRes,
 		FirewallResult: &combinedFirewall,
 		SanitizedArgs:  sanitizedArgs,
 		LatencyMs:      time.Since(start).Milliseconds(),
