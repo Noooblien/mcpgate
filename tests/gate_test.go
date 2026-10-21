@@ -10,6 +10,7 @@ import (
 	"github.com/Noooblien/mcpgate/pkg/gateway"
 	"github.com/Noooblien/mcpgate/pkg/proxy"
 	"github.com/Noooblien/mcpgate/pkg/rbac"
+	"github.com/Noooblien/mcpgate/pkg/schema"
 	"github.com/Noooblien/mcpgate/pkg/redact"
 	"github.com/Noooblien/mcpgate/pkg/spec"
 )
@@ -315,5 +316,72 @@ func TestGateway_LoopDetectorInterception(t *testing.T) {
 	}
 	if !strings.Contains(vBlocked.BlockReason, "infinite tool execution loop detected") {
 		t.Errorf("expected loop detection block reason, got: %s", vBlocked.BlockReason)
+	}
+}
+
+func TestGateway_SchemaValidationInterception(t *testing.T) {
+	tmpAudit := "./.audit/test_gw_schema.jsonl"
+	defer os.RemoveAll(tmpAudit)
+
+	reg := schema.NewSchemaRegistry(true)
+
+	minP := 1
+	_ = reg.RegisterTool(schema.ToolDefinition{
+		Name: "fetch_record",
+		InputSchema: schema.ToolInputSchema{
+			Type: schema.TypeObject,
+			Properties: map[string]schema.PropertySchema{
+				"id": {
+					Type:      schema.TypeString,
+					MinLength: &minP,
+				},
+				"format": {
+					Type: schema.TypeString,
+					Enum: []string{"json", "csv"},
+				},
+			},
+			Required:             []string{"id"},
+			AdditionalProperties: false,
+		},
+	})
+
+	gate, err := gateway.NewMCPGate(gateway.GatewayConfig{
+		HMACSeed:       "gw-schema-test-seed",
+		MaxRPM:         100,
+		BurstSize:      20,
+		AuditLogPath:   tmpAudit,
+		SchemaRegistry: reg,
+	})
+	if err != nil {
+		t.Fatalf("failed to init gate: %v", err)
+	}
+
+	// Case 1: Valid schema call -> ALLOWED
+	v1 := gate.InterceptToolCall("agent_schema_test", rbac.RoleAdmin, "fetch_record", map[string]interface{}{
+		"id":     "rec_12345",
+		"format": "json",
+	})
+	if !v1.Allowed || v1.Verdict != spec.VerdictAllow {
+		t.Fatalf("expected valid schema to be allowed, got: %s (reason: %s)", v1.Verdict, v1.BlockReason)
+	}
+
+	// Case 2: Missing required field "id" -> BLOCKED
+	v2 := gate.InterceptToolCall("agent_schema_test", rbac.RoleAdmin, "fetch_record", map[string]interface{}{
+		"format": "json",
+	})
+	if v2.Allowed || v2.Verdict != spec.VerdictBlock {
+		t.Fatalf("expected missing id to be blocked, got: %s", v2.Verdict)
+	}
+	if !strings.Contains(v2.BlockReason, "Schema Validation Denied") {
+		t.Errorf("expected schema validation block reason, got: %s", v2.BlockReason)
+	}
+
+	// Case 3: Invalid enum value -> BLOCKED
+	v3 := gate.InterceptToolCall("agent_schema_test", rbac.RoleAdmin, "fetch_record", map[string]interface{}{
+		"id":     "rec_12345",
+		"format": "xml_unsupported",
+	})
+	if v3.Allowed || v3.Verdict != spec.VerdictBlock {
+		t.Fatalf("expected invalid enum to be blocked, got: %s", v3.Verdict)
 	}
 }

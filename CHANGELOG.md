@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Tool Argument Schema Validation & Type Compliance Engine (`pkg/schema`, `mcpgate schema`)**: Pre-execution input validation engine validating MCP tool call arguments against strict JSON Schema definitions, enforcing required fields, primitive types, min/max length, numeric ranges, enum sets, regex patterns, and unexpected property bans.
+- **Gateway Pipeline Integration (Phase 1.8)**: Evaluates incoming tool arguments against registered schemas before RBAC and prompt injection scanners, rejecting malformed calls with structured diagnostic violation errors.
+- **CLI Subcommand & Scorecard Visualizations**: Terminal ANSI scorecards (`RenderSchemaScorecard`), Mermaid sequence flow diagrams (`--mermaid`), JSON summaries, and Markdown compliance reporting (`--demo`, `--format`).
 - **Multi-Agent Recursive Tool Loop Shielding (OWASP-LLM08)**: Integrated `AgentLoopDetector` directly into the gateway interception pipeline (`pkg/gateway/engine.go`), tracking sliding-window execution digests with per-agent isolation and TTL-based eviction to halt recursive call loops and runaway token cost.
 - **Speculative Dry-Run Simulation, Blast Radius Classifier & Reversibility Governor (`pkg/simulation`, `mcpgate simulation`)**: Pre-execution sandbox evaluator classifying operational side-effects across 5 categories (`read_only`, `reversible_mutation`, `irreversible_destructive`, `external_egress`, `resource_allocation`).
 - **Multi-Vector Blast Radius Surface Modeling**: Real-time scoring across destructive risk scores (0.0 to 10.0), reversibility quotients (1.0 trivial undo to 0.0 irreversible), entity impact counts, financial risk exposure, and scope levels (`isolated`, `tenant_wide`, `infrastructure_wide`).

@@ -27,6 +27,7 @@ import (
 	"github.com/Noooblien/mcpgate/pkg/redact"
 	"github.com/Noooblien/mcpgate/pkg/risk"
 	"github.com/Noooblien/mcpgate/pkg/sandbox"
+	"github.com/Noooblien/mcpgate/pkg/schema"
 	"github.com/Noooblien/mcpgate/pkg/simulation"
 )
 
@@ -1104,6 +1105,85 @@ func main() {
 		}
 		return
 
+	case "schema":
+		schemaCmd := flag.NewFlagSet("schema", flag.ExitOnError)
+		demo := schemaCmd.Bool("demo", false, "Run schema validation suite across compliant, malformed, and adversarial payloads")
+		toolName := schemaCmd.String("tool", "read_file", "Target MCP tool name to validate")
+		argsJSON := schemaCmd.String("args", "{}", "JSON string of tool arguments")
+		strict := schemaCmd.Bool("strict", false, "Reject uncatalogued tools and exit code 1 on violation")
+		mermaid := schemaCmd.Bool("mermaid", false, "Render Mermaid diagram of schema validation sequence")
+		format := schemaCmd.String("format", "text", "Output format: text | markdown | json")
+		_ = schemaCmd.Parse(os.Args[2:])
+
+		reg := schema.NewSchemaRegistry(*strict)
+
+		if *demo || len(os.Args) <= 2 {
+			summary := schema.RunSchemaDemo()
+
+			switch *format {
+			case "markdown":
+				fmt.Println(schema.RenderSchemaMarkdown(summary))
+			case "json":
+				bytes, _ := json.MarshalIndent(summary, "", "  ")
+				fmt.Println(string(bytes))
+			default:
+				fmt.Print(schema.RenderSchemaScorecard(summary))
+				if *mermaid {
+					fmt.Println(schema.RenderSchemaMermaid(summary.Evaluations))
+				}
+				fmt.Printf("\n\033[1;32m✓ Schema Validation Complete.\033[0m Evaluated %d tool calls (%d compliant, %d rejected).\n\n",
+					summary.TotalValidated, summary.ValidCount, summary.InvalidCount)
+			}
+
+			if *strict && summary.InvalidCount > 0 {
+				os.Exit(1)
+			}
+			return
+		}
+
+		var args map[string]interface{}
+		if err := json.Unmarshal([]byte(*argsJSON), &args); err != nil {
+			log.Fatalf("Invalid JSON in -args: %v", err)
+		}
+
+		start := time.Now()
+		eval := reg.ValidateArguments(*toolName, args)
+		summary := schema.SchemaSummary{
+			TotalValidated: 1,
+			ValidCount: func() int {
+				if eval.Valid {
+					return 1
+				}
+				return 0
+			}(),
+			InvalidCount: func() int {
+				if !eval.Valid {
+					return 1
+				}
+				return 0
+			}(),
+			Duration:    time.Since(start),
+			Evaluations: []schema.SchemaValidationResult{eval},
+		}
+
+		switch *format {
+		case "markdown":
+			fmt.Println(schema.RenderSchemaMarkdown(summary))
+		case "json":
+			bytes, _ := json.MarshalIndent(eval, "", "  ")
+			fmt.Println(string(bytes))
+		default:
+			fmt.Print(schema.RenderSchemaScorecard(summary))
+			if *mermaid {
+				fmt.Println(schema.RenderSchemaMermaid(summary.Evaluations))
+			}
+		}
+
+		if *strict && !eval.Valid {
+			os.Exit(1)
+		}
+		return
+
 	case "simulation":
 		simCmd := flag.NewFlagSet("simulation", flag.ExitOnError)
 		demo := simCmd.Bool("demo", false, "Run speculative dry-run simulation across standard scenarios")
@@ -1198,6 +1278,7 @@ func printHelp() {
 	fmt.Println("  inspect     Intercept and evaluate a tool call through RBAC, firewall, and secret redaction")
 	fmt.Println("  sandbox     Virtual tool sandboxing, command AST deconstruction & path jail isolation")
 	fmt.Println("  simulation  Speculative dry-run simulation, blast radius classifier & reversibility governor")
+	fmt.Println("  schema      Validate tool call arguments against strict JSON schemas & type constraints")
 	fmt.Println("  jit         Just-In-Time (JIT) ephemeral capability delegation, scoped leases & step-up gates")
 	fmt.Println("  anomaly     Detect behavioral tool call anomalies, Markov sequence jumps & payload statistical drift")
 	fmt.Println("  honeypot    Deploy canary honeytools, detect token exfiltration & synthesize deceptive responses")
@@ -1216,6 +1297,8 @@ func printHelp() {
 	fmt.Println("  mcpgate sandbox [--demo] [--mermaid] [--format text|markdown|json]")
 	fmt.Println("  mcpgate sandbox -cmd 'rm -rf /' -path '/workspace/app' -mode enforcing")
 	fmt.Println("  mcpgate simulation [--demo] [--mermaid] [--format text|markdown|json]")
+	fmt.Println("  mcpgate schema [--demo] [--mermaid] [--format text|markdown|json]")
+	fmt.Println("  mcpgate schema -tool read_file -args '{\"path\": \"config.json\"}'")
 	fmt.Println("  mcpgate simulation -tool delete_database -agent agent_1 -args '{\"db\": \"prod\"}'")
 	fmt.Println("  mcpgate jit [--demo] [--mermaid] [--format text|markdown|json]")
 	fmt.Println("  mcpgate jit -tool diagnostics.query_metrics -agent agent_1 -args '{\"service\": \"api\"}'")
