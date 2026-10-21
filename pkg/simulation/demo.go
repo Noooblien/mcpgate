@@ -2,27 +2,89 @@ package simulation
 
 import (
 	"encoding/json"
-	"fmt"
+	"time"
 )
 
-// RunSimulationDemo executes a demonstration of speculative dry-run simulations.
-func RunSimulationDemo() {
+// RunSimulationDemo executes a demonstration of speculative dry-run simulations across standard scenarios.
+func RunSimulationDemo() SimulationSummary {
+	start := time.Now()
 	gov := NewSimulationGovernor(DefaultConfig())
 
-	fmt.Println("=== MCPGate Speculative Dry-Run Simulation Demo ===")
+	scenarios := []struct {
+		agentID  string
+		toolName string
+		args     map[string]interface{}
+	}{
+		{
+			agentID:  "agent_worker_01",
+			toolName: "read_file",
+			args:     map[string]interface{}{"path": "config.yaml"},
+		},
+		{
+			agentID:  "agent_worker_02",
+			toolName: "sql_query",
+			args:     map[string]interface{}{"query": "SELECT * FROM accounts WHERE status = 'active'"},
+		},
+		{
+			agentID:  "agent_devops",
+			toolName: "restart_service",
+			args:     map[string]interface{}{"service": "cache-redis"},
+		},
+		{
+			agentID:  "agent_finance",
+			toolName: "create_payment_intent",
+			args:     map[string]interface{}{"amount": 450.0, "currency": "usd", "destination": "acct_vendor_99"},
+		},
+		{
+			agentID:  "agent_rogue",
+			toolName: "bash_exec",
+			args:     map[string]interface{}{"cmd": "rm -rf / --no-preserve-root"},
+		},
+		{
+			agentID:  "agent_dba",
+			toolName: "sql_query",
+			args:     map[string]interface{}{"query": "DROP TABLE production_customers"},
+		},
+	}
 
-	// 1. Safe Read-Only
-	args1, _ := json.Marshal(map[string]interface{}{"path": "config.yaml"})
-	plan1 := gov.Simulate("agent-001", "read_file", args1)
-	fmt.Printf("[1] %s: Category=%s, Decision=%s\n", plan1.ToolName, plan1.Category, plan1.Decision)
+	var results []*SimulationReport
+	totalRisk := 0.0
+	totalFinancial := 0.0
+	allowed := 0
+	stepUp := 0
+	blocked := 0
 
-	// 2. High Risk Financial Allocation
-	args2, _ := json.Marshal(map[string]interface{}{"amount": 2500.0, "currency": "usd"})
-	plan2 := gov.Simulate("agent-002", "create_payment_intent", args2)
-	fmt.Printf("[2] %s: Category=%s, Decision=%s, Exposure=$%.2f\n", plan2.ToolName, plan2.Category, plan2.Decision, plan2.BlastRadius.EstimatedFinancialRiskUSD)
+	for _, sc := range scenarios {
+		raw, _ := json.Marshal(sc.args)
+		res := gov.Simulate(sc.agentID, sc.toolName, raw)
+		results = append(results, res)
 
-	// 3. Catastrophic Destructive Action
-	args3, _ := json.Marshal(map[string]interface{}{"db": "production_users"})
-	plan3 := gov.Simulate("agent-003", "delete_database", args3)
-	fmt.Printf("[3] %s: Category=%s, Decision=%s, Scope=%s\n", plan3.ToolName, plan3.Category, plan3.Decision, plan3.BlastRadius.ScopeLevel)
+		totalRisk += res.BlastRadius.DestructiveRiskScore
+		totalFinancial += res.BlastRadius.EstimatedFinancialRiskUSD
+
+		switch res.Decision {
+		case DecisionAllowImmediate:
+			allowed++
+		case DecisionRequireDualCustodyApproval:
+			stepUp++
+		case DecisionBlockHighBlastRadius:
+			blocked++
+		}
+	}
+
+	avgRisk := 0.0
+	if len(results) > 0 {
+		avgRisk = totalRisk / float64(len(results))
+	}
+
+	return SimulationSummary{
+		TotalSimulations:          len(results),
+		AllowedImmediate:          allowed,
+		RequireStepUp:             stepUp,
+		Blocked:                   blocked,
+		AverageRiskScore:          avgRisk,
+		TotalFinancialExposureUSD: totalFinancial,
+		Simulations:               results,
+		Duration:                  time.Since(start),
+	}
 }

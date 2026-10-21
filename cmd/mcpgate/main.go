@@ -27,6 +27,7 @@ import (
 	"github.com/Noooblien/mcpgate/pkg/redact"
 	"github.com/Noooblien/mcpgate/pkg/risk"
 	"github.com/Noooblien/mcpgate/pkg/sandbox"
+	"github.com/Noooblien/mcpgate/pkg/simulation"
 )
 
 func main() {
@@ -1103,6 +1104,89 @@ func main() {
 		}
 		return
 
+	case "simulation":
+		simCmd := flag.NewFlagSet("simulation", flag.ExitOnError)
+		demo := simCmd.Bool("demo", false, "Run speculative dry-run simulation across standard scenarios")
+		toolName := simCmd.String("tool", "read_file", "Target MCP tool name to simulate")
+		agentID := simCmd.String("agent", "agent_worker_01", "Requesting agent identifier")
+		argsJSON := simCmd.String("args", "{}", "JSON string of tool arguments")
+		mermaid := simCmd.Bool("mermaid", false, "Render Mermaid diagram of speculative dry-run sequence")
+		format := simCmd.String("format", "text", "Output format: text | markdown | json")
+		strict := simCmd.Bool("strict", false, "Exit with code 1 if operation is blocked or requires step-up")
+		_ = simCmd.Parse(os.Args[2:])
+
+		gov := simulation.NewSimulationGovernor(simulation.DefaultConfig())
+
+		if *demo || len(os.Args) <= 2 {
+			summary := simulation.RunSimulationDemo()
+
+			switch *format {
+			case "markdown":
+				fmt.Println(simulation.RenderSimulationMarkdown(summary))
+			case "json":
+				bytes, _ := json.MarshalIndent(summary, "", "  ")
+				fmt.Println(string(bytes))
+			default:
+				fmt.Print(simulation.RenderSimulationScorecard(summary))
+				if *mermaid {
+					fmt.Println(simulation.RenderSimulationMermaid(summary.Simulations))
+				}
+				fmt.Printf("\n\033[1;32m✓ Speculative Simulation Complete.\033[0m Evaluated %d tool calls (%d allowed immediately, %d step-up dual custody, %d blocked).\n\n",
+					summary.TotalSimulations, summary.AllowedImmediate, summary.RequireStepUp, summary.Blocked)
+			}
+
+			if *strict && (summary.Blocked > 0 || summary.RequireStepUp > 0) {
+				os.Exit(1)
+			}
+			return
+		}
+
+		start := time.Now()
+		report := gov.Simulate(*agentID, *toolName, []byte(*argsJSON))
+		summary := simulation.SimulationSummary{
+			TotalSimulations: 1,
+			AllowedImmediate: func() int {
+				if report.Decision == simulation.DecisionAllowImmediate {
+					return 1
+				}
+				return 0
+			}(),
+			RequireStepUp: func() int {
+				if report.Decision == simulation.DecisionRequireDualCustodyApproval {
+					return 1
+				}
+				return 0
+			}(),
+			Blocked: func() int {
+				if report.Decision == simulation.DecisionBlockHighBlastRadius {
+					return 1
+				}
+				return 0
+			}(),
+			AverageRiskScore:          report.BlastRadius.DestructiveRiskScore,
+			TotalFinancialExposureUSD: report.BlastRadius.EstimatedFinancialRiskUSD,
+			Simulations:               []*simulation.SimulationReport{report},
+			Duration:                  time.Since(start),
+		}
+
+		switch *format {
+		case "markdown":
+			fmt.Println(simulation.RenderSimulationMarkdown(summary))
+		case "json":
+			bytes, _ := json.MarshalIndent(report, "", "  ")
+			fmt.Println(string(bytes))
+		default:
+			fmt.Print(simulation.RenderSimulationScorecard(summary))
+			if *mermaid {
+				fmt.Println(simulation.RenderSimulationMermaid(summary.Simulations))
+			}
+		}
+
+		if *strict && report.Decision != simulation.DecisionAllowImmediate {
+			os.Exit(1)
+		}
+		return
+
 	default:
 		printHelp()
 	}
@@ -1113,6 +1197,7 @@ func printHelp() {
 	fmt.Println("\nCommands:")
 	fmt.Println("  inspect     Intercept and evaluate a tool call through RBAC, firewall, and secret redaction")
 	fmt.Println("  sandbox     Virtual tool sandboxing, command AST deconstruction & path jail isolation")
+	fmt.Println("  simulation  Speculative dry-run simulation, blast radius classifier & reversibility governor")
 	fmt.Println("  jit         Just-In-Time (JIT) ephemeral capability delegation, scoped leases & step-up gates")
 	fmt.Println("  anomaly     Detect behavioral tool call anomalies, Markov sequence jumps & payload statistical drift")
 	fmt.Println("  honeypot    Deploy canary honeytools, detect token exfiltration & synthesize deceptive responses")
@@ -1130,6 +1215,8 @@ func printHelp() {
 	fmt.Println("\nExamples:")
 	fmt.Println("  mcpgate sandbox [--demo] [--mermaid] [--format text|markdown|json]")
 	fmt.Println("  mcpgate sandbox -cmd 'rm -rf /' -path '/workspace/app' -mode enforcing")
+	fmt.Println("  mcpgate simulation [--demo] [--mermaid] [--format text|markdown|json]")
+	fmt.Println("  mcpgate simulation -tool delete_database -agent agent_1 -args '{\"db\": \"prod\"}'")
 	fmt.Println("  mcpgate jit [--demo] [--mermaid] [--format text|markdown|json]")
 	fmt.Println("  mcpgate jit -tool diagnostics.query_metrics -agent agent_1 -args '{\"service\": \"api\"}'")
 	fmt.Println("  mcpgate anomaly [--demo] [--mermaid] [--format text|markdown|json]")
