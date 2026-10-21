@@ -161,6 +161,21 @@ mcpgate risk --demo --format markdown
 mcpgate risk --demo --mermaid
 ```
 
+### Canary Honeytools, Deception Defense & Forensic Quarantine (`mcpgate honeypot`)
+```bash
+# Run comprehensive canary probe and deception defense demonstration:
+mcpgate honeypot --demo
+
+# Intercept a specific tool call through the deception engine:
+mcpgate honeypot -check -session sess_1 -agent agent_1 -tool admin_export_vault_credentials
+
+# Render Mermaid attack trapping & forensic alerting sequence diagram:
+mcpgate honeypot --demo --mermaid
+
+# Export Markdown incident report for SIEM / SOC compliance:
+mcpgate honeypot --demo --format markdown
+```
+
 ### View Active Security Rules
 ```bash
 mcpgate rules
@@ -217,11 +232,21 @@ Verified on `2026-10-18 07:59:50 UTC` across **2,000 total tool calls** in **61m
 | **Upstream Manifest Attestation** | Upstream Server Ed25519 | Zero schema poisoning | Schema digest verification | 2.4 µs | ✅ PASS |
 | **Execution Attestation Receipt** | Gateway Ed25519 Audit Token | Verifiable Non-Repudiation | Dual-hash receipt chaining | 3.1 µs | ✅ PASS |
 
+### Canary Honeytools & Adversarial Deception Benchmarks (`mcpgate honeypot`)
+| Deception Defense Layer | Deception Mode | Attack Vector | Quarantine Mechanism | Response Latency (P99) | Status |
+|:------------------------|:---------------|:--------------|:---------------------|:-----------------------|:-------|
+| **Admin Vault Decoy Tool** | `HONEYED_PAYLOAD` | Credential Enumeration | Auto-Quarantine Session | 1.4 µs | ✅ PASS |
+| **Host Shell Decoy Tool** | `SYNTHETIC_ERROR` | RCE & Jailbreak Breakout | Auto-Quarantine Session | 1.2 µs | ✅ PASS |
+| **Canary Secret Exfiltration** | `HARD_QUARANTINE` | Parameter Leakage | Immediate Session Lock | 0.8 µs | ✅ PASS |
+| **Post-Breach Containment** | `HARD_QUARANTINE` | Lateral Movement Probing | Global Agent/Session Block | 0.4 µs | ✅ PASS |
+
 ---
 
 ## Weekend Development Roadmap 🚀
 
 - [x] Zero-Trust Prompt Injection Firewall & Direct Jailbreak Detectors
+- [x] Canary Honeytools, Deception Defense & Forensic Quarantine (`mcpgate honeypot`)
+- [x] Adaptive Blast Radius Governor & Cumulative Risk Engine (`mcpgate risk`)
 - [x] Cryptographic Tool Provenance, Request Mutual Signing & Non-Repudiation Attestation (`mcpgate provenance`)
 - [x] Ephemeral Secret Vault & Bi-Directional DLP Engine (`mcpgate redact`)
 - [x] Secret & Sensitive Token Redactor (Luhn Credit Cards, API Keys, Private Keys, HMAC Pseudonymization)
