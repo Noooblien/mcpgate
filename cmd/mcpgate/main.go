@@ -18,6 +18,7 @@ import (
 	"github.com/Noooblien/mcpgate/pkg/honeypot"
 	"github.com/Noooblien/mcpgate/pkg/httpproxy"
 	"github.com/Noooblien/mcpgate/pkg/injectbench"
+	"github.com/Noooblien/mcpgate/pkg/jit"
 	"github.com/Noooblien/mcpgate/pkg/policy"
 	"github.com/Noooblien/mcpgate/pkg/provenance"
 	"github.com/Noooblien/mcpgate/pkg/proxy"
@@ -895,6 +896,111 @@ func main() {
 		}
 		return
 
+	case "jit":
+		jitCmd := flag.NewFlagSet("jit", flag.ExitOnError)
+		demo := jitCmd.Bool("demo", false, "Run 4 production JIT capability delegation, ephemeral lease and step-up scenarios")
+		reqTool := jitCmd.String("tool", "diagnostics.query_metrics", "Target tool name for JIT capability lease")
+		agentID := jitCmd.String("agent", "agent_worker_01", "Requesting agent identifier")
+		argsJSON := jitCmd.String("args", "{}", "JSON string of tool arguments")
+		justification := jitCmd.String("justification", "Routine diagnostic telemetry", "Escalation justification")
+		ttlSec := jitCmd.Int("ttl", 60, "Requested capability lease TTL in seconds")
+		mermaid := jitCmd.Bool("mermaid", false, "Render Mermaid diagram of JIT authorization flow")
+		format := jitCmd.String("format", "text", "Output format: text | markdown | json")
+		strict := jitCmd.Bool("strict", false, "Exit with code 1 if any elevation is denied or blocked")
+		_ = jitCmd.Parse(os.Args[2:])
+
+		engine := jit.NewEngine(jit.DefaultJITConfig())
+
+		if *demo || len(os.Args) <= 2 {
+			summary := jit.RunJITDemo()
+
+			switch *format {
+			case "markdown":
+				fmt.Println(jit.RenderJITMarkdown(summary))
+			case "json":
+				bytes, _ := json.MarshalIndent(summary, "", "  ")
+				fmt.Println(string(bytes))
+			default:
+				fmt.Print(jit.RenderJITScorecard(summary))
+				if *mermaid {
+					fmt.Println(jit.RenderJITMermaid(summary))
+				}
+				fmt.Printf("\n\033[1;32m✓ JIT Demo Complete.\033[0m Evaluated %d requests (%d consumed, %d step-up required, %d denied/tampered).\n\n",
+					summary.TotalRequests, summary.ConsumedLeases, summary.StepUpRequired, summary.DeniedRequests)
+			}
+
+			if *strict && summary.DeniedRequests > 0 {
+				os.Exit(1)
+			}
+			return
+		}
+
+		var args map[string]interface{}
+		if err := json.Unmarshal([]byte(*argsJSON), &args); err != nil {
+			log.Fatalf("Invalid JSON in -args: %v", err)
+		}
+
+		req := jit.JITRequest{
+			AgentID:       *agentID,
+			ToolName:      *reqTool,
+			Args:          args,
+			Justification: *justification,
+			RequestedTTL:  time.Duration(*ttlSec) * time.Second,
+		}
+
+		lease, err := engine.RequestLease(req)
+		var res *jit.VerificationResult
+		if err != nil {
+			res = &jit.VerificationResult{
+				LeaseID:          lease.LeaseID,
+				ToolName:         *reqTool,
+				AgentID:          *agentID,
+				Status:           jit.StatusDenied,
+				ExecutionAllowed: false,
+				Reason:           err.Error(),
+				ViolationCode:    "ERR_ELEVATION_DENIED",
+				RiskTier:         lease.RiskTier,
+				Lease:            lease,
+			}
+		} else {
+			res = engine.ValidateAndConsume(lease.LeaseID, *reqTool, args)
+		}
+
+		summary := &jit.JITSummary{
+			TotalRequests: 1,
+			ConsumedLeases: func() int {
+				if res.ExecutionAllowed {
+					return 1
+				}
+				return 0
+			}(),
+			DeniedRequests: func() int {
+				if !res.ExecutionAllowed {
+					return 1
+				}
+				return 0
+			}(),
+			Evaluations: []*jit.VerificationResult{res},
+		}
+
+		switch *format {
+		case "markdown":
+			fmt.Println(jit.RenderJITMarkdown(summary))
+		case "json":
+			bytes, _ := json.MarshalIndent(res, "", "  ")
+			fmt.Println(string(bytes))
+		default:
+			fmt.Print(jit.RenderJITScorecard(summary))
+			if *mermaid {
+				fmt.Println(jit.RenderJITMermaid(summary))
+			}
+		}
+
+		if *strict && !res.ExecutionAllowed {
+			os.Exit(1)
+		}
+		return
+
 	default:
 		printHelp()
 	}
@@ -904,6 +1010,7 @@ func printHelp() {
 	fmt.Println("MCPGate — Zero-Trust Model Context Protocol (MCP) Security Gateway & Prompt Injection Firewall")
 	fmt.Println("\nCommands:")
 	fmt.Println("  inspect     Intercept and evaluate a tool call through RBAC, firewall, and secret redaction")
+	fmt.Println("  jit         Just-In-Time (JIT) ephemeral capability delegation, scoped leases & step-up gates")
 	fmt.Println("  anomaly     Detect behavioral tool call anomalies, Markov sequence jumps & payload statistical drift")
 	fmt.Println("  honeypot    Deploy canary honeytools, detect token exfiltration & synthesize deceptive responses")
 	fmt.Println("  risk        Evaluate multi-dimensional blast radius, velocity burst containment & cumulative session risk")
@@ -918,6 +1025,8 @@ func printHelp() {
 	fmt.Println("  audit       Verify cryptographic hash chain integrity of the audit ledger")
 	fmt.Println("  rules       List active security policies, banned patterns, and redaction schemas")
 	fmt.Println("\nExamples:")
+	fmt.Println("  mcpgate jit [--demo] [--mermaid] [--format text|markdown|json]")
+	fmt.Println("  mcpgate jit -tool diagnostics.query_metrics -agent agent_1 -args '{\"service\": \"api\"}'")
 	fmt.Println("  mcpgate anomaly [--demo] [--mermaid] [--format text|markdown|json]")
 	fmt.Println("  mcpgate anomaly -check -agent agent_1 -tool run_cmd -prior read_file -args '{\"cmd\": \"id\"}'")
 	fmt.Println("  mcpgate honeypot [--demo] [--mermaid] [--format text|markdown|json]")
