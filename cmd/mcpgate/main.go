@@ -26,6 +26,7 @@ import (
 	"github.com/Noooblien/mcpgate/pkg/rbac"
 	"github.com/Noooblien/mcpgate/pkg/redact"
 	"github.com/Noooblien/mcpgate/pkg/risk"
+	"github.com/Noooblien/mcpgate/pkg/sandbox"
 )
 
 func main() {
@@ -1001,6 +1002,107 @@ func main() {
 		}
 		return
 
+	case "sandbox":
+		sbCmd := flag.NewFlagSet("sandbox", flag.ExitOnError)
+		demo := sbCmd.Bool("demo", false, "Run 4-scenario sandbox, AST deconstruction & path jailing demo")
+		cmdStr := sbCmd.String("cmd", "", "Command to evaluate through AST sandbox")
+		pathStr := sbCmd.String("path", "", "Target file path to evaluate against virtual workspace jail")
+		agentID := sbCmd.String("agent", "agent_worker_01", "Requesting agent identifier")
+		toolName := sbCmd.String("tool", "run_command", "Target MCP tool name")
+		workspace := sbCmd.String("workspace", "/workspace", "Virtual workspace root jail directory")
+		mode := sbCmd.String("mode", "enforcing", "Sandbox enforcement mode: enforcing | audit | disabled")
+		mermaid := sbCmd.Bool("mermaid", false, "Render Mermaid diagram of sandbox verification DAG")
+		format := sbCmd.String("format", "text", "Output format: text | markdown | json")
+		strict := sbCmd.Bool("strict", false, "Exit with code 1 if any sandbox violation or quarantine occurs")
+		_ = sbCmd.Parse(os.Args[2:])
+
+		cfg := sandbox.DefaultSandboxConfig()
+		if *workspace != "" {
+			cfg.WorkspaceRoot = *workspace
+		}
+		switch strings.ToLower(*mode) {
+		case "audit":
+			cfg.Mode = sandbox.ModeAudit
+		case "disabled":
+			cfg.Mode = sandbox.ModeDisabled
+		default:
+			cfg.Mode = sandbox.ModeEnforcing
+		}
+
+		engine := sandbox.NewEngine(cfg)
+
+		if *demo || (len(os.Args) <= 2 && *cmdStr == "" && *pathStr == "") {
+			summary := sandbox.RunSandboxDemo()
+
+			switch *format {
+			case "markdown":
+				fmt.Println(sandbox.RenderSandboxMarkdown(summary))
+			case "json":
+				bytes, _ := json.MarshalIndent(summary, "", "  ")
+				fmt.Println(string(bytes))
+			default:
+				fmt.Print(sandbox.RenderSandboxScorecard(summary))
+				if *mermaid {
+					fmt.Println(sandbox.RenderSandboxMermaid(summary))
+				}
+				fmt.Printf("\n\033[1;32m✓ Sandbox Demo Complete.\033[0m Evaluated %d calls (%d authorized, %d quarantined).\n\n",
+					summary.TotalEvaluated, summary.AllowedCount, summary.BlockedCount)
+			}
+
+			if *strict && summary.BlockedCount > 0 {
+				os.Exit(1)
+			}
+			return
+		}
+
+		req := sandbox.SandboxRequest{
+			RequestID: "req_cli_eval",
+			AgentID:   *agentID,
+			ToolName:  *toolName,
+			Command:   *cmdStr,
+			Path:      *pathStr,
+			Timestamp: time.Now(),
+		}
+
+		eval := engine.Evaluate(req)
+		summary := &sandbox.SandboxSummary{
+			TotalEvaluated: 1,
+			AllowedCount: func() int {
+				if eval.IsAllowed {
+					return 1
+				}
+				return 0
+			}(),
+			BlockedCount: func() int {
+				if !eval.IsAllowed {
+					return 1
+				}
+				return 0
+			}(),
+			AverageRiskScore: eval.RiskScore,
+			TierBreakdown:    map[sandbox.IsolationTier]int{eval.IsolationTier: 1},
+			Evaluations:      []*sandbox.SandboxEvaluation{eval},
+			Duration:         eval.Duration,
+		}
+
+		switch *format {
+		case "markdown":
+			fmt.Println(sandbox.RenderSandboxMarkdown(summary))
+		case "json":
+			bytes, _ := json.MarshalIndent(eval, "", "  ")
+			fmt.Println(string(bytes))
+		default:
+			fmt.Print(sandbox.RenderSandboxScorecard(summary))
+			if *mermaid {
+				fmt.Println(sandbox.RenderSandboxMermaid(summary))
+			}
+		}
+
+		if *strict && !eval.IsAllowed {
+			os.Exit(1)
+		}
+		return
+
 	default:
 		printHelp()
 	}
@@ -1010,6 +1112,7 @@ func printHelp() {
 	fmt.Println("MCPGate — Zero-Trust Model Context Protocol (MCP) Security Gateway & Prompt Injection Firewall")
 	fmt.Println("\nCommands:")
 	fmt.Println("  inspect     Intercept and evaluate a tool call through RBAC, firewall, and secret redaction")
+	fmt.Println("  sandbox     Virtual tool sandboxing, command AST deconstruction & path jail isolation")
 	fmt.Println("  jit         Just-In-Time (JIT) ephemeral capability delegation, scoped leases & step-up gates")
 	fmt.Println("  anomaly     Detect behavioral tool call anomalies, Markov sequence jumps & payload statistical drift")
 	fmt.Println("  honeypot    Deploy canary honeytools, detect token exfiltration & synthesize deceptive responses")
@@ -1025,6 +1128,8 @@ func printHelp() {
 	fmt.Println("  audit       Verify cryptographic hash chain integrity of the audit ledger")
 	fmt.Println("  rules       List active security policies, banned patterns, and redaction schemas")
 	fmt.Println("\nExamples:")
+	fmt.Println("  mcpgate sandbox [--demo] [--mermaid] [--format text|markdown|json]")
+	fmt.Println("  mcpgate sandbox -cmd 'rm -rf /' -path '/workspace/app' -mode enforcing")
 	fmt.Println("  mcpgate jit [--demo] [--mermaid] [--format text|markdown|json]")
 	fmt.Println("  mcpgate jit -tool diagnostics.query_metrics -agent agent_1 -args '{\"service\": \"api\"}'")
 	fmt.Println("  mcpgate anomaly [--demo] [--mermaid] [--format text|markdown|json]")
