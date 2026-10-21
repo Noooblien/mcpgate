@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Multi-Agent Recursive Tool Loop Shielding (OWASP-LLM08)**: Integrated `AgentLoopDetector` directly into the gateway interception pipeline (`pkg/gateway/engine.go`), tracking sliding-window execution digests with per-agent isolation and TTL-based eviction to halt recursive call loops and runaway token cost.
+- **Speculative Dry-Run Simulation, Blast Radius Classifier & Reversibility Governor (`pkg/simulation`, `mcpgate simulation`)**: Pre-execution sandbox evaluator classifying operational side-effects across 5 categories (`read_only`, `reversible_mutation`, `irreversible_destructive`, `external_egress`, `resource_allocation`).
+- **Multi-Vector Blast Radius Surface Modeling**: Real-time scoring across destructive risk scores (0.0 to 10.0), reversibility quotients (1.0 trivial undo to 0.0 irreversible), entity impact counts, financial risk exposure, and scope levels (`isolated`, `tenant_wide`, `infrastructure_wide`).
+- **Three-Tier Policy Gating**: Enforces automatic immediate execution for safe idempotent tools, mandatory human/dual-custody step-up for high-exposure transactions ($100+ ceiling or elevated reversibility friction), and unconditional blocking of catastrophic infrastructure destruction.
+- **CLI Subcommand & Scorecard Visualizations**: Terminal ANSI scorecards (`RenderSimulationScorecard`), Mermaid execution flow sequence diagrams (`--mermaid`), JSON exports, and Markdown compliance reports (`--demo`, `--format`).
 - **Adaptive Blast Radius Governor & Cumulative Risk Scoring Engine (`pkg/risk`)**: Multi-dimensional blast radius surface evaluation for Model Context Protocol (MCP) tool execution, defending against OWASP-LLM06 (Excessive Agency) and OWASP-LLM08 (Cascading Failures).
 - **Multi-Vector Risk Surface Modeling**: Real-time scoring across 6 impact dimensions: `Filesystem Mutation`, `Network Egress`, `Financial Cost`, `Privilege Escalation`, `Data Exfiltration`, and `Irreversibility`.
 - **Stateful Session Risk Tracking & Exponential Half-Life Decay**: Tracks cumulative session risk points ($Score \times 2^{-\Delta t / t_{1/2}}$) with configurable decay kinetics (default 15m half-life) allowing autonomous recovery for well-behaved agents.
