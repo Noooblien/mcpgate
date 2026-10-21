@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Noooblien/mcpgate/pkg/anomaly"
 	"github.com/Noooblien/mcpgate/pkg/audit"
 	"github.com/Noooblien/mcpgate/pkg/fuzz"
 	"github.com/Noooblien/mcpgate/pkg/gateway"
@@ -784,6 +785,116 @@ func main() {
 		}
 		return
 
+	case "anomaly":
+		anomCmd := flag.NewFlagSet("anomaly", flag.ExitOnError)
+		demo := anomCmd.Bool("demo", false, "Run 4 production behavioral anomaly detection and sequence deviation scenarios")
+		check := anomCmd.Bool("check", false, "Evaluate a single tool call observation against behavioral baselines")
+		sessionID := anomCmd.String("session", "sess-prod-01", "Session identifier")
+		agentID := anomCmd.String("agent", "agent-production-01", "Agent identifier")
+		toolName := anomCmd.String("tool", "run_static_analysis", "Target MCP tool name")
+		priorTool := anomCmd.String("prior", "", "Prior tool invoked in session")
+		argsJSON := anomCmd.String("args", "{}", "JSON string of tool arguments")
+		alertThresh := anomCmd.Float64("alert-thresh", 0.40, "Alert anomaly score threshold")
+		quarantineThresh := anomCmd.Float64("quarantine-thresh", 0.70, "Quarantine anomaly score threshold")
+		blockThresh := anomCmd.Float64("block-thresh", 0.85, "Block anomaly score threshold")
+		mermaid := anomCmd.Bool("mermaid", false, "Render Mermaid state diagram of sequence transitions")
+		format := anomCmd.String("format", "text", "Output format: text | markdown | json")
+		strict := anomCmd.Bool("strict", false, "Exit with code 1 if any anomaly (quarantine or block) is detected")
+		_ = anomCmd.Parse(os.Args[2:])
+
+		policy := anomaly.DefaultAnomalyPolicy()
+		policy.AlertThreshold = *alertThresh
+		policy.QuarantineThreshold = *quarantineThresh
+		policy.BlockThreshold = *blockThresh
+
+		if *demo || (!*check && *argsJSON == "{}" && *toolName == "run_static_analysis" && len(os.Args) <= 2) {
+			summary := anomaly.RunDemoSuite(policy)
+
+			switch *format {
+			case "markdown":
+				fmt.Println(anomaly.RenderAnomalyMarkdownReport(summary))
+			case "json":
+				bytes, _ := json.MarshalIndent(summary, "", "  ")
+				fmt.Println(string(bytes))
+			default:
+				fmt.Print(anomaly.RenderAnomalyScorecard(summary))
+				if *mermaid {
+					fmt.Println(anomaly.RenderAnomalyMermaid(summary.Assessments))
+				}
+				fmt.Printf("\n\033[1;32m✓ Anomaly Demo Complete.\033[0m Evaluated %d calls (%d approved, %d alerted, %d quarantined, %d blocked).\n\n",
+					summary.TotalEvaluated, summary.Allowed, summary.Alerted, summary.Quarantined, summary.Blocked)
+			}
+
+			if *strict && (summary.Blocked > 0 || summary.Quarantined > 0) {
+				os.Exit(1)
+			}
+			return
+		}
+
+		var args map[string]interface{}
+		if err := json.Unmarshal([]byte(*argsJSON), &args); err != nil {
+			log.Fatalf("Invalid JSON in -args: %v", err)
+		}
+
+		detector := anomaly.NewDetector(policy)
+		obs := anomaly.ToolCallObservation{
+			SessionID: *sessionID,
+			AgentID:   *agentID,
+			ToolName:  *toolName,
+			PriorTool: *priorTool,
+			Arguments: args,
+			Timestamp: time.Now(),
+		}
+		assessment := detector.Evaluate(obs)
+
+		switch *format {
+		case "json":
+			bytes, _ := json.MarshalIndent(assessment, "", "  ")
+			fmt.Println(string(bytes))
+		case "markdown":
+			summ := anomaly.AnomalySummary{
+				TotalEvaluated: 1,
+				Assessments:    []anomaly.AnomalyAssessment{*assessment},
+			}
+			if assessment.Verdict == anomaly.VerdictAllow {
+				summ.Allowed = 1
+			} else if assessment.Verdict == anomaly.VerdictAlert {
+				summ.Alerted = 1
+			} else if assessment.Verdict == anomaly.VerdictQuarantine {
+				summ.Quarantined = 1
+			} else {
+				summ.Blocked = 1
+			}
+			summ.MaxScore = assessment.CompositeScore
+			summ.AverageScore = assessment.CompositeScore
+			fmt.Println(anomaly.RenderAnomalyMarkdownReport(summ))
+		default:
+			summ := anomaly.AnomalySummary{
+				TotalEvaluated: 1,
+				Assessments:    []anomaly.AnomalyAssessment{*assessment},
+			}
+			if assessment.Verdict == anomaly.VerdictAllow {
+				summ.Allowed = 1
+			} else if assessment.Verdict == anomaly.VerdictAlert {
+				summ.Alerted = 1
+			} else if assessment.Verdict == anomaly.VerdictQuarantine {
+				summ.Quarantined = 1
+			} else {
+				summ.Blocked = 1
+			}
+			summ.MaxScore = assessment.CompositeScore
+			summ.AverageScore = assessment.CompositeScore
+			fmt.Print(anomaly.RenderAnomalyScorecard(summ))
+			if *mermaid {
+				fmt.Println(anomaly.RenderAnomalyMermaid([]anomaly.AnomalyAssessment{*assessment}))
+			}
+		}
+
+		if *strict && (assessment.Verdict == anomaly.VerdictBlock || assessment.Verdict == anomaly.VerdictQuarantine) {
+			os.Exit(1)
+		}
+		return
+
 	default:
 		printHelp()
 	}
@@ -793,6 +904,7 @@ func printHelp() {
 	fmt.Println("MCPGate — Zero-Trust Model Context Protocol (MCP) Security Gateway & Prompt Injection Firewall")
 	fmt.Println("\nCommands:")
 	fmt.Println("  inspect     Intercept and evaluate a tool call through RBAC, firewall, and secret redaction")
+	fmt.Println("  anomaly     Detect behavioral tool call anomalies, Markov sequence jumps & payload statistical drift")
 	fmt.Println("  honeypot    Deploy canary honeytools, detect token exfiltration & synthesize deceptive responses")
 	fmt.Println("  risk        Evaluate multi-dimensional blast radius, velocity burst containment & cumulative session risk")
 	fmt.Println("  provenance  Verify Ed25519 request signing, prevent replay attacks, and issue attestation receipts")
@@ -806,6 +918,8 @@ func printHelp() {
 	fmt.Println("  audit       Verify cryptographic hash chain integrity of the audit ledger")
 	fmt.Println("  rules       List active security policies, banned patterns, and redaction schemas")
 	fmt.Println("\nExamples:")
+	fmt.Println("  mcpgate anomaly [--demo] [--mermaid] [--format text|markdown|json]")
+	fmt.Println("  mcpgate anomaly -check -agent agent_1 -tool run_cmd -prior read_file -args '{\"cmd\": \"id\"}'")
 	fmt.Println("  mcpgate honeypot [--demo] [--mermaid] [--format text|markdown|json]")
 	fmt.Println("  mcpgate honeypot -check -session sess_1 -agent agent_1 -tool admin_export_vault_credentials")
 	fmt.Println("  mcpgate risk [--demo] [--mermaid] [--format text|markdown|json]")
